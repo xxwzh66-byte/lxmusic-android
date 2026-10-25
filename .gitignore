@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# Kotlin compiler daemon / incremental caches
+.kotlin/
+
+# Android Studio
+.idea/
+*.iml
+.DS_Store
+
+# Logs
+*.log
+
+# Reverse-engineering scratch: decompiled media3 smali/jars used while chasing the
+# shuffle-stall bug (HANDOVER §8). Rebuildable, 11 MB, no source value. Kept out of git.
+_dex/
+
+# Python helpers' caches (the _cnt.py / _per_class.py test counters)
+__pycache__/
+*.pyc

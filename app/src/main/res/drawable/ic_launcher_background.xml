@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JiJianMusic launcher plate (light palette): two-stop linear gradient
+     plus a soft light source at the top-left, a pale lavender plate carrying a deep-indigo note. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear"
+                android:startX="12.96" android:startY="0.00"
+                android:endX="66.96" android:endY="108.00">
+                <item android:offset="0" android:color="#FFFFFF"/>
+                <item android:offset="1" android:color="#EDEAFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial"
+                android:centerX="28.08" android:centerY="17.28"
+                android:gradientRadius="99.36">
+                <item android:offset="0.0" android:color="#8CC7BFFF"/>
+                <item android:offset="0.52" android:color="#24C7BFFF"/>
+                <item android:offset="1.0" android:color="#00C7BFFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

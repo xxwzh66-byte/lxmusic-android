@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 极简图标: 深靛渐变底 + 纯白单个八分音符。
+         真实取色见 drawable/ic_launcher_background.xml（#3B2FA3 → #0D0D1E）
+         与 drawable/ic_launcher_foreground.xml（#FFFFFF）。 -->
+    <color name="ic_launcher_background">#3B2FA3</color>
+    <color name="ic_launcher_brand">#6C5CE7</color>
+</resources>

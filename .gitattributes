@@ -1,0 +1,20 @@
+# Normalise text files to LF in the repository.
+# The Kotlin sources are written with LF on purpose (no BOM, no CRLF), so a
+# system-wide core.autocrlf=true must not turn them back into CRLF on checkout.
+* text=auto eol=lf
+
+# Windows batch scripts must stay CRLF or cmd.exe mis-parses them.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets: never diff, never convert.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.webp     binary
+*.gif      binary
+*.ico      binary
+*.jar      binary
+*.apk      binary
+*.keystore binary
+*.jks      binary

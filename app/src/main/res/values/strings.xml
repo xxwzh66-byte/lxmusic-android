@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">极简music</string>
+    <string name="notification_channel_playback">正在播放</string>
+</resources>
