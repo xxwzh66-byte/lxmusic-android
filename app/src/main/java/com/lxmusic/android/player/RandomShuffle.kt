@@ -9,12 +9,12 @@ import kotlin.random.Random
  * 于是 20 首的队列连播 10 首以内听到重复的概率约 89%。用户点随机图的是
  * 「这一轮把没听过的都过一遍」，不是「掷骰子」。
  *
- * 现在的语义是**洗牌周期**：一条全序（permutation）走到底才重洗，周期内
+ * 现在的语义是**洗牌周期**：一条洗牌全序走到底才重洗，周期内
  * 每首歌恰好出现一次。周期结束时的重洗**锚定在当前这首歌上**——新序的第
  * 0 位是刚播完的歌，第 1 位才是下一轮的开头，所以既不会「上一轮最后一首
  * 和下一轮第一首是同一首」，也不会漏掉任何歌。
  *
- * 为什么必须是 permutation 而不是「随机挑一个」：ExoPlayer 的
+ * 为什么必须是「一条全序」而不是「每首歌各抽一次」：ExoPlayer 的
  * [androidx.media3.exoplayer.source.ShuffleOrder] 问的是四个互相约束的
  * 问题——`getFirstIndex()` / `getNextIndex(i)` / `getPreviousIndex(i)` /
  * `getLastIndex()`。它会拿这四个答案去判断「还有没有下一首」、去建
@@ -25,7 +25,7 @@ import kotlin.random.Random
 object RandomShuffle {
 
     /**
-     * `0 until size` 的一个均匀排列，Fisher-Yates。
+     * `0 until size` 的一个均匀打乱，Fisher-Yates。
      *
      * 元素 `k` 是「第 k 个播的队列下标」。每个下标恰好出现一次。
      */
@@ -77,7 +77,7 @@ object RandomShuffle {
  *
  * 线程：ExoPlayer 的播放线程会通过已安装的 [RandomShuffleOrder] 进来提问，
  * app 主线程会因为按键、队列编辑进来回答。内部只有一个 [IntArray] 和几个
- * Int，但并发改写数组会让某个线程读到写了一半的排列（重复/漏项），所以每个
+ * Int，但并发改写数组会让某个线程读到写了一半的序（重复/漏项），所以每个
  * 入口都在本实例的监视器上串行化。
  */
 class RandomShuffleState {
@@ -122,25 +122,33 @@ class RandomShuffleState {
     /**
      * [current] 之后播什么。
      *
-     * 周期内就是全序的下一位；走到全序末位时**在这里就重洗并锚定当前曲**，
-     * 所以返回值永远是一个存在的下标（队列 > 1 首时），ExoPlayer 不会被告知
-     * 「没有下一首」而停在原地。
+     * **纯查询：不画序、不推进周期、不改版本号。** media3 在一次决策里会反复
+     * 问这个问题（判断「还有没有下一首」、给通知栏取按钮目标、建
+     * MediaPeriodQueue），只要它有副作用，同一个决策就会拿到两套不同的洗牌
+     * 全序。那正是「随机播放要按几次才真跳」的根因：前几次问到的答案是按旧序
+     * 算的，只有等到某次查询顺手重洗完，答案才变成新序的。
      *
-     * 重洗发生在查询里看起来危险，但它是幂等的：重洗后 [current] 落在第 0
-     * 位，再问一次仍然返回第 1 位，ExoPlayer 一次决策内问多遍拿到的是同一个
-     * 答案。
+     * 周期的推进只发生在 [advanceCycle]（真的换了歌），因此每个周期恰好被
+     * 消费一次，与 ExoPlayer 问了几遍无关。
      */
     @Synchronized
     fun nextIndex(size: Int, current: Int, random: Random = Random.Default): Int {
-        if (size <= 1) return -1
-        if (current !in 0 until size) return -1
-        lastKnown = current
-        val o = orderFor(size, current, random)
+        val o = cycleOrder(size, current, random) ?: return -1
         val pos = o.indexOf(current)
-        if (pos < 0) return o[1]
+        // 走到本周期末位时回到这条序的开头。正常情况下不会走到这里：
+        // [advanceCycle] 在末位那首歌真正开始播时就已经画好了下一轮，
+        // 此时 current 落在新序的第 0 位。这里是防御性回退。
+        //
+        // 回退不能直接返回 o[0]：新序由 [RandomShuffle.cycleFrom] 锚定在当前
+        // 这首上，o[0] 就是 current 自己，返回它等于「下一首 = 这首」，用户
+        // 按下一首会听到原地重播。所以跳过 current 取下一个槽位。
+        if (pos < 0) return o[0]
         if (pos < size - 1) return o[pos + 1]
-        // 一轮播完：从当前这首重新起一轮，下一首是新序的第 1 位。
-        return drawn(RandomShuffle.cycleFrom(size, current, random))[1]
+        // 末位：回绕到序首。但序首可能就是 [current] —— [RandomShuffle.cycleFrom]
+        // 正是把它锚在第 0 位。返回自己等于「下一首 = 这首」，用户按下会听到
+        // 原地重播，所以这种情况再往后挪一格（size > 1 由 cycleOrder 保证，
+        // o[1] 一定存在且不等于 current）。
+        return if (o[0] != current) o[0] else o[1]
     }
 
     /**
@@ -156,10 +164,7 @@ class RandomShuffleState {
      */
     @Synchronized
     fun previousIndex(size: Int, current: Int, random: Random = Random.Default): Int {
-        if (size <= 1) return -1
-        if (current !in 0 until size) return -1
-        lastKnown = current
-        val o = orderFor(size, current, random)
+        val o = cycleOrder(size, current, random) ?: return -1
         val pos = o.indexOf(current)
         if (pos <= 0) return -1
         return o[pos - 1]
@@ -179,7 +184,39 @@ class RandomShuffleState {
         return orderFor(size, lastKnown.takeIf { it in 0 until size }, random)[size - 1]
     }
 
+    /**
+     * 三个查询共用的入口：校验、记住当前位置、取（必要时画出）本周期。
+     *
+     * @return 本周期的序；`size`/`current` 不可用时返回 null。
+     */
+    private fun cycleOrder(size: Int, current: Int, random: Random): IntArray? {
+        if (size <= 1) return null
+        if (current !in 0 until size) return null
+        lastKnown = current
+        return orderFor(size, current, random)
+    }
+
     // ---------------- 生命周期 ----------------
+
+    /**
+     * 一首歌真的开始播了——**周期推进的唯一入口**。
+     *
+     * 当这首歌正好是本周期末位时，立刻以它为锚画下一轮：新序第 0 位是刚播
+     * 完的这首，第 1 位是下一轮的开头。于是下一首歌既不是刚听过的这首，也
+     * 不会漏掉任何歌。
+     *
+     * 幂等：重画之后 current 落在新序第 0 位，再调一次不会继续重画。所以
+     * 「transition 回调」和「playIndex」两条路径都可以放心调，重复无害。
+     *
+     * @return true 表示这次调用换了序，调用方需要把新序重新装给 ExoPlayer。
+     */
+    @Synchronized
+    fun advanceCycle(size: Int, current: Int, random: Random = Random.Default): Boolean {
+        val o = cycleOrder(size, current, random) ?: return false
+        if (o.indexOf(current) < size - 1) return false
+        drawn(RandomShuffle.cycleFrom(size, current, random))
+        return true
+    }
 
     /**
      * 丢掉当前周期，下一首歌开始新的一轮。
@@ -259,7 +296,7 @@ class RandomShuffleState {
  * V6.2: 一次「序被改写」的共享计数器。
  *
  * 为什么要单独一个对象：ExoPlayer 会拿着 [RandomShuffleState.copy] 的克隆体
- * 去服务真实会话，克隆体的排列数组是独立快照，但「这份序还是不是当前版本」
+ * 去服务真实会话，克隆体的序数组是独立快照，但「这份序还是不是当前版本」
  * 这个问题必须两边答案一致。用同一个计数器实例，任何一侧重洗都会让另一侧
  * 看见，安装点才能把它修回来。`@Synchronized` 保证自增对两个线程可见。
  */

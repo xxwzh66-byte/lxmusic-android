@@ -38,6 +38,25 @@ class PlaybackService : MediaSessionService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true)
+            // V1.0: a headset / bluetooth / lockscreen "previous" must always go
+            // to the previous track, never restart the current one.
+            //
+            // `BasePlayer.seekToPrevious()` is not `seekToPreviousMediaItem()`:
+            // it first checks `getCurrentPosition() <= getMaxSeekToPreviousPosition()`
+            // and, when the current track has been playing for longer than that
+            // (media3's default: 3000 ms), it calls `seekToCurrentItem(0, ...)`
+            // instead - i.e. it restarts the track from the top. That default
+            // suits podcast skip-back UIs and is exactly the wrong behaviour for
+            // a music player, where the hardware previous button is expected to
+            // behave like the on-screen one.
+            //
+            // Raising the threshold above any track length makes the condition
+            // unreachable in practice, so every previous press takes the
+            // `seekToPreviousMediaItemInternal` branch and moves one item back.
+            // The in-app button was never affected: it calls
+            // PlayerController.prev() directly and never goes through
+            // BasePlayer.seekToPrevious().
+            .setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)
             .build()
 
         player = exo

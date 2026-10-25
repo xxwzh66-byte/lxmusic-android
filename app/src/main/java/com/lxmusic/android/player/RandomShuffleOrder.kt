@@ -11,8 +11,8 @@ import kotlin.random.Random
  * previous buttons exactly the same playlist as the in-app buttons - one order,
  * not two.
  *
- * What matters here is what is *not* in this class: any decision. The order is
- * a permutation of the queue and is kept by [RandomShuffleState], so four
+ * What matters here is what is *not* in this class: any decision. The shuffle
+ * cycle is one order over the queue and is kept by [RandomShuffleState], so four
  * questions ("where does it start", "where does it end", "what is after this
  * track", "what is before this track") are guaranteed to describe the same
  * playlist. ExoPlayer asks all four, sometimes more than once per decision,

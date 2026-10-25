@@ -52,10 +52,10 @@ data class PlayerState(
  * Drives ExoPlayer. Local tracks play straight from their file / content Uri;
  * online tracks resolve a stream URL through the custom-source [SourceManager].
  *
- * V6.1: shuffle is a **cycle** - one permutation is consumed front to back so a
+ * V6.1: shuffle is a **cycle** - one shuffle order is consumed front to back so a
  * full pass plays every track exactly once, then a new pass is drawn anchored
- * on whichever track is playing. "Previous" does not walk that permutation; it
- * walks the real play history (see [PlayHistory]), because the permutation's
+ * on whichever track is playing. "Previous" does not walk that order; it
+ * walks the real play history (see [PlayHistory]), because the order's
  * predecessor is a track this pass has not reached yet.
  */
 class PlayerController(
@@ -100,7 +100,7 @@ class PlayerController(
      *
      * V6.1.2: this used to be called `index`, which the GLOSSARY lists as a word
      * to avoid ("playing index" reads equally well as the player's own index, a
-     * position in the shuffle permutation, or this queue slot). It is the queue
+     * position in the shuffle cycle, or this queue slot). It is the queue
      * slot, and it is what [playAt] takes.
      */
     private var currentIndex = -1
@@ -128,7 +128,7 @@ class PlayerController(
      * and by the [RandomShuffleOrder] handed to ExoPlayer, so both draw from the
      * same source.
      *
-     * V6.1: the policy is a *cycle* — one permutation is consumed front to back,
+     * V6.1: the policy is a *cycle* — one shuffle order is consumed front to back,
      * so a pass plays every track exactly once before it is redrawn anchored on
      * the current track. It survives a track change; only a queue edit or a mode
      * flip invalidates it. (The old KDoc here described independent uniform
@@ -236,11 +236,22 @@ class PlayerController(
                         watchdog.reset()
                         // V6.1: the cycle now **survives** a track change. The
                         // old code called `shuffleState.invalidate()` here, which
-                        // threw the whole permutation away on every transition -
+                        // threw the whole shuffle order away on every transition -
                         // that is exactly why shuffle degenerated into "sample
                         // one track uniformly at random, repeatedly" (A->B->A
                         // was allowed) and why the installed order churned.
                         recordMove(left, i)
+                    }
+                    // V1.0: the ONE place the shuffle cycle advances. Doing it
+                    // on the transition (instead of inside `nextIndex`) keeps
+                    // the query free of side effects, so media3's several
+                    // questions per decision all get the same cycle, and each
+                    // cycle is consumed exactly once no matter how often it asks.
+                    if (changed && shuffle) {
+                        // 走完一轮：新序已经画好，必须重新装给 ExoPlayer，
+                        // 否则通知栏还在按上一轮的序回答「下一首」。
+                        val cycled = shuffleState.advanceCycle(queue.size, i)
+                        if (cycled) installShuffleOrder()
                     }
                     _state.value = _state.value.copy(
                         current = music, error = null, positionMs = 0, durationMs = 0,
@@ -268,7 +279,7 @@ class PlayerController(
         if (queue.isEmpty()) return
         if (shuffle) {
             // V6.1: walk the same cycle the buttons walk. The old code drew a
-            // brand new permutation here (`redrawNext`), which is why the
+            // brand new order here (`redrawNext`), which is why the
             // auto-advance path and the notification path could disagree.
             if (queue.size <= 1) return
             val target = shuffleState.nextIndex(queue.size, currentIndex)
@@ -419,7 +430,7 @@ class PlayerController(
      * notification, lockscreen, bluetooth and fluid-cloud. Single-item mode (a
      * restored track, an online source) can never reach that length, so the
      * system next button used to walk ExoPlayer's own order instead of ours and
-     * stopped when it ran out of one permutation.
+     * stopped when it ran out of one shuffle order.
      *
      * Returns true when the queue is now mirrored and [playAt] may seek by
      * index. Playback is preserved: the current track stays selected and keeps
@@ -501,8 +512,8 @@ class PlayerController(
             // V6.1: the player is moved *first*, then the order is rebuilt for
             // the new list. The old code called resetShuffle() before
             // moveMediaItem, which installed an order whose indices described
-            // the list *before* the move - ExoPlayer then walked a permutation
-            // of the wrong list.
+            // the list *before* the move - ExoPlayer then walked a cycle over
+            // the wrong list.
             controller?.moveMediaItem(from, to)
             forgetInstalledOrder()
             shuffleState.invalidate()
@@ -581,7 +592,7 @@ class PlayerController(
      * - shuffle: the target comes from [RandomShuffleState.nextIndex] - the
      *   *same* answer ExoPlayer's installed [RandomShuffleOrder] gives the
      *   notification, lockscreen, bluetooth and auto-advance. Deliberately not
-     *   `redrawNext`: a fresh permutation per press would ignore the cycle the
+     *   `redrawNext`: a fresh order per press would ignore the cycle the
      *   auto-advance path is walking, and the two paths would disagree.
      * - sequential: the next queue slot, or nothing at the end (repeat ALL
      *   wraps, repeat OFF stops - ExoPlayer honours it because the mirrored
@@ -680,6 +691,15 @@ class PlayerController(
         recordMove(currentIndex, i)
         currentIndex = i
         playlistMode = false
+        // V1.0: this path sets currentIndex before setMediaItem, so
+        // onMediaItemTransition returns early and would never advance the
+        // cycle. Advance it here too - advanceCycle is idempotent, so when the
+        // transition *does* fire the second call does nothing. Unlike the
+        // transition path there is nothing to reinstall: this path drops the
+        // mirrored playlist right below (`playlistMode = false` +
+        // forgetInstalledOrder), and the next ensureMirrorPlaylist() installs
+        // the new order because the version moved.
+        if (shuffle) shuffleState.advanceCycle(queue.size, i)
         // V6.1: the cycle is deliberately *not* invalidated here. This path is
         // how auto-advance plays the target the cycle just picked; throwing the
         // order away would make the next query redraw, i.e. every track would
@@ -838,7 +858,7 @@ class PlayerController(
         // 语义上没有任何变化，只是白付一次 masking 的代价。
         //
         // V6.1.2（审查澄清）: 这个 memo 不是「永不重装」的保证——第一次
-        // `orderFor` 画出排列时 generation 会 +1，于是下一个 timeline 事件仍会
+        // `orderFor` 画出新序时 generation 会 +1，于是下一个 timeline 事件仍会
         // 重装一次。那一次是**有界**的（重装本身不画序，所以不会再次失效），
         // 也正是它把原来的无限重建环截断成「一次开关最多多付一轮」。
         // 想彻底消掉这一轮，得让 ExoPlayer 侧的 order 不再是快照（见

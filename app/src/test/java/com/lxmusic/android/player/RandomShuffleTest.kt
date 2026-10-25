@@ -9,25 +9,25 @@ import kotlin.random.Random
 /**
  * V5.3.6: the random-playback order.
  *
- * The order is a permutation of the queue (element `k` is the queue index that
+ * The order is one arrangement of the queue (element `k` is the queue index that
  * plays k-th), produced by Fisher-Yates. Two properties are load-bearing:
  *
  * - every source index appears exactly once, so "next of anything" is always a
  *   different, always valid, always existing track - this is what stops the
  *   player from reading a "no next item" answer and stopping for good;
- * - the draw is uniform over the permutations, so no position in the playlist
+ * - the draw is uniform over the arrangements, so no position in the playlist
  *   is favoured and a track can legitimately come back after a pass.
  */
 class RandomShuffleTest {
 
     @Test
-    fun shuffledOrderIsAPermutationOfEveryIndex() {
+    fun shuffledOrderIsAnArrangementOfEveryIndex() {
         for (size in 1..24) {
             for (seed in 0 until 20) {
                 val order = RandomShuffle.shuffledOrder(size, Random(seed))
                 assertEquals("size mismatch", size, order.size)
                 assertEquals(
-                    "order $order is not a permutation of 0 until $size",
+                    "order $order is not an arrangement of 0 until $size",
                     (0 until size).toSet(),
                     order.toSet(),
                 )

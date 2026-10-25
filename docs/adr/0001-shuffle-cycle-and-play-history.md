@@ -2,7 +2,7 @@
 
 ## Context
 
-The player used to answer "next" by drawing a brand-new permutation of the whole
+The player used to answer "next" by drawing a brand-new order over the whole
 queue every time it was asked, and by throwing the previous one away on every
 track change. The result was statistically indistinguishable from "pick any
 other track uniformly at random": over a 20-track queue, a repeat within the
@@ -12,7 +12,7 @@ next button, because each path drew its own order.
 
 ## Decision
 
-A shuffle **cycle** is one permutation walked front to back; every track appears
+A shuffle **cycle** is one order walked front to back; every track appears
 exactly once per cycle. The cycle survives track changes and survives the
 player asking the same question more than once. When the cycle's last track
 finishes, the next press starts a new cycle *anchored on the track that just
@@ -25,12 +25,12 @@ is empty.
 
 ## Considered options
 
-- **Fresh permutation per press** (the old behaviour). Simple, but produces the
+- **Fresh order per press** (the old behaviour). Simple, but produces the
   repeat-heavy distribution above and makes two decision paths impossible to
   reconcile.
 - **Pre-shuffled queue order** (reorder the list once). Trivially consistent, but
   destroys the user's queue order and makes "turn shuffle off" ambiguous.
-- **Cycle + shared state** (chosen). The permutation lives in one object that
+- **Cycle + shared state** (chosen). The order lives in one object that
   both the app buttons and the media player's `ShuffleOrder` read from, so the
   two paths cannot drift.
 

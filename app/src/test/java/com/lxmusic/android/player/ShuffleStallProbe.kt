@@ -163,18 +163,23 @@ class ShuffleStallProbe {
         }
 
         /**
-         * 一次换歌落地：更新 index 并把「离开的那首」记进历史。
+         * 一次换歌落地：更新 index，把「离开的那首」记进历史，并按需推进周期。
          *
          * v6.1：**不**再 invalidate——周期必须跨换歌存活，否则每首歌都重洗，
          * 全序永远走不到第二位（这就是旧版 A→B→A 合法的原因）。
+         *
+         * V1.0：周期推进发生在这里（等同于 PlayerController 的
+         * onMediaItemTransition）。放在查询里会让 media3 一次决策内的多次询问
+         * 拿到不同的全序，周期会被截短。
          */
         private fun move(target: Int, fromHistory: Boolean = true) {
             if (fromHistory) history.onTrackChanged(target.toString(), index.toString())
             index = target
+            // 必须和 appNext/appPrev 用同一个 random，否则周期末尾的重洗会用
+            // 另一条随机流，两个模型各自走出不同的全序（曾经让这条一致性
+            // 断言在第 7 步假失败）。
+            if (shuffle) state.advanceCycle(size, target, random)
         }
-
-        /** PlayerController.onMediaItemTransition：现在只记历史，不重洗。 */
-        fun onTransition() = Unit
     }
 
     @Test

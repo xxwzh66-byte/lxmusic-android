@@ -103,7 +103,7 @@ class RandomShuffleOrderTest {
     fun previousUndoesNextAlongTheWholeWalk() {
         // Walks a drawn cycle up to (but not through) its last slot: stepping
         // past it deliberately rolls onto a new cycle, and comparing across that
-        // boundary would be comparing two different permutations.
+        // boundary would be comparing two different orders.
         val o = order(11)
         var cursor = o.getFirstIndex()
         repeat(10) {

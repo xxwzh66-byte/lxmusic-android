@@ -11,7 +11,7 @@ import kotlin.random.Random
  *
  * The contract changed shape in this version, and the change is the point:
  *
- * - a cycle is a real permutation - following `nextIndex` visits every queue
+ * - a cycle is one real order - following `nextIndex` visits every queue
  *   index exactly once before any of them comes back;
  * - the cycle **survives** a track change (the old code invalidated the whole
  *   order on every transition, which is what made shuffle behave like
@@ -54,7 +54,7 @@ class RandomShuffleStateTest {
 
     @Test
     fun previousIsTheOtherEndOfNext() {
-        // A permutation means previous must undo next, except at the cycle's
+        // One order means previous must undo next, except at the cycle's
         // very first slot - there is nothing behind it.
         val (s, r) = state(3)
         val size = 9
@@ -84,7 +84,7 @@ class RandomShuffleStateTest {
     @Test
     fun theCycleSurvivesATrackChange() {
         // The regression this version fixes: transitioning to a track must not
-        // throw the permutation away. Walking a full cycle through the *same*
+        // throw the order away. Walking a full cycle through the *same*
         // state must still visit every index once.
         val (s, r) = state(29)
         val size = 10
@@ -100,18 +100,81 @@ class RandomShuffleStateTest {
 
     @Test
     fun aFinishedCycleStartsANewOneAnchoredOnTheCurrentTrack() {
+        // V1.0: the cycle advances on the *transition*, not inside the query.
+        // nextIndex() stays pure so media3's repeated questions in one decision
+        // all see the same order.
         val (s, r) = state(31)
         val size = 8
         val firstOrder = s.firstIndex(size, r)
         var cursor = s.firstIndex(size, r)
-        // Walk to the last slot of the cycle, then ask for one more.
         repeat(size - 1) { cursor = s.nextIndex(size, cursor, r) }
         val last = cursor
-        val wrapped = s.nextIndex(size, last, r)
-        assertTrue("the wrapped pick is out of range", wrapped in 0 until size)
-        assertNotEquals("a finished cycle must not replay the same track", last, wrapped)
-        assertEquals("a finished cycle draws a new permutation", 2, s.cycles)
+        assertEquals("walking a cycle must not redraw it", 1, s.cycles)
+
+        val cycled = s.advanceCycle(size, last, r)
+        assertTrue("reaching the last slot must roll the cycle", cycled)
+        assertEquals("a finished cycle draws a new order", 2, s.cycles)
+
+        val next = s.nextIndex(size, last, r)
+        assertTrue("the wrapped pick is out of range", next in 0 until size)
+        assertNotEquals("a finished cycle must not replay the same track", last, next)
+
+        // The slot that just played is the new cycle's anchor, so asking again
+        // for the track after it gives the same answer.
+        assertEquals(next, s.nextIndex(size, last, r))
         assertTrue(firstOrder in 0 until size)
+    }
+
+    @Test
+    fun queryingAtTheCycleEndDoesNotRedrawIt() {
+        // The regression behind "shuffle needs three presses to actually move":
+        // media3 asks getNextIndex() several times per decision. If the query
+        // redrew the order, each of those questions would answer against a
+        // different order and the cycle would be cut short.
+        val (s, r) = state(41)
+        val size = 6
+        var cursor = s.firstIndex(size, r)
+        repeat(size - 1) { cursor = s.nextIndex(size, cursor, r) }
+        val last = cursor
+        repeat(20) { s.nextIndex(size, last, r) }
+        assertEquals("querying must never draw a new cycle", 1, s.cycles)
+        repeat(20) { s.firstIndex(size, r); s.lastIndex(size, r) }
+        assertEquals("neither must first/last", 1, s.cycles)
+    }
+
+    @Test
+    fun queryingAtTheCycleEndNeverAnswersWithTheTrackThatJustPlayed() {
+        // The defensive wrap at the last slot must not answer "this same
+        // track": the cycle that would follow is anchored on it, so it sits at
+        // slot 0 and a naive wrap would replay it.
+        val (s, r) = state(47)
+        for (size in 2..9) {
+            s.invalidate()
+            var cursor = s.firstIndex(size, r)
+            repeat(size - 1) { cursor = s.nextIndex(size, cursor, r) }
+            val last = cursor
+            // No advanceCycle here - this is the defensive path, where the
+            // order still describes the cycle that just finished.
+            repeat(10) {
+                val pick = s.nextIndex(size, last, r)
+                assertTrue("wrap pick $pick out of range for size $size", pick in 0 until size)
+                assertNotEquals("the wrap replayed the track that just played", last, pick)
+            }
+        }
+    }
+
+    @Test
+    fun rollingTheCycleTwiceForTheSameTrackIsHarmless() {
+        // advanceCycle is called from both the transition callback and
+        // playIndex(); the second call must not roll again.
+        val (s, r) = state(43)
+        val size = 5
+        var cursor = s.firstIndex(size, r)
+        repeat(size - 1) { cursor = s.nextIndex(size, cursor, r) }
+        assertTrue(s.advanceCycle(size, cursor, r))
+        assertEquals(2, s.cycles)
+        repeat(5) { s.advanceCycle(size, cursor, r) }
+        assertEquals("rolling must be idempotent for one track", 2, s.cycles)
     }
 
     @Test

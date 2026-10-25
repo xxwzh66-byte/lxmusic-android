@@ -1,9 +1,9 @@
 # 极简music (JiJianMusic) — 项目交接报告
 
-> 交接版本：**versionCode 26 / versionName "6.2.0"**
-> 报告生成：2026-10-19（v6.2.0 更新于 2026-10-19）
-> 代码规模：`app/src/main/java` 71 个 .kt / 12859 行；`app/src/test/java` 25 个 .kt / 2928 行 / **214 项测试 0 失败**
-> 产物：`build/apk/jijian-music-6.2.0-vc26-debug.apk`（23399318 B）
+> 交接版本：**versionCode 1 / versionName "1.0.0"**
+> 报告生成：2026-10-19（v6.2.0 更新于 2026-10-19；**V1.0 重新编号于 2026-10-25**）
+> 代码规模：`app/src/main/java` 71 个 .kt / 12922 行；`app/src/test/java` 25 个 .kt / 2978 行 / **217 项测试 0 失败**
+> 产物：`build/apk/jijian-music-1.0.0-vc1-debug.apk`（23513794 B）
 
 ---
 
@@ -22,6 +22,10 @@
 - **v6.2.0 一致性修正**：媒体会话的「上一首」也走播放历史；队列槽位按 **media id**
   解析（修 `playIndex(3)` 被报成 0）；`ShuffleOrder` 克隆体共享 generation，分叉不再
   瞒过安装器；暂停中的播放器不再被判 stuck buffer。见第九节「v6.2.0 变更」
+- **V1.0 重新编号 + 两处播放修复**：版本号回到 `1.0.0` / `versionCode 1`，作为正式首发；
+  **周期推进移出查询**（`nextIndex` 变成纯查询，新增 `advanceCycle` 作为唯一推进入口），
+  修掉「随机播放要按几次下一首才真跳」；耳机/蓝牙「上一首」不再变成当前曲重播
+  （`setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)`）。见第九节「V1.0 变更」
 - **播放内核**：Media3 ExoPlayer 1.4.1 + `MediaSessionService`
 - **持久化**：Room 2.6.1（v4）+ DataStore Preferences
 - **构建**：Gradle 8.7 + AGP 8.5.2 + Kotlin 2.0.20，Groovy DSL
@@ -36,7 +40,7 @@
 
 | 组件 | 位置 | 备注 |
 |---|---|---|
-| JDK 17 | `D:\demo\tools\jdk17\jdk-17.0.12+7` | **系统只有 JDK 25，AGP 8.5 不兼容**，必须用这个 |
+| JDK 21 | `C:\Program Files (x86)\Android\openjdk\jdk-21.0.8` | **AGP 8.5 不兼容 JDK 25**（系统默认只有 25），必须显式指定这个。旧文档里的 `D:\demo\tools\jdk17\...` **已不存在** |
 | Android SDK | `D:\demo\android-sdk` | 只有 `platforms/android-34` + `build-tools/34.0.0` + `platform-tools` |
 | Gradle | wrapper 自动下载 | `gradle/wrapper/gradle-wrapper.properties` 指向**华为云镜像**，官方 CDN 极慢 |
 
@@ -46,14 +50,14 @@
 
 ```powershell
 cd D:\demo\lxmusic-android
-$env:JAVA_HOME="D:\demo\tools\jdk17\jdk-17.0.12+7"
+$env:JAVA_HOME="C:\Program Files (x86)\Android\openjdk\jdk-21.0.8"
 $env:ANDROID_SDK_ROOT="D:\demo\android-sdk"
 .\gradlew.bat :app:assembleDebug :app:versionedApk :app:testDebugUnitTest --no-daemon --console=plain
 ```
 
 - `:app:assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`
 - `:app:versionedApk` → `build/apk/jijian-music-<版本>-vc<号>-debug.apk`（**给用户的就是这个**，见第六节）
-- `:app:testDebugUnitTest` → 214 项单元测试
+- `:app:testDebugUnitTest` → 217 项单元测试
 
 ### 这台机器上没有的东西（重要）
 
@@ -213,15 +217,15 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
 这是本项目历史最曲折的部分，从 v5.3 到 v6.1 迭代了九个版本。
 **当前语义（V6.1，`RandomShuffle.kt` 的 KDoc 是权威定义）**：
 
-- **洗牌周期（shuffle cycle）**：队列被 Fisher-Yates 洗成一条排列，`getNextIndex` /
-  `getPreviousIndex` / `getFirstIndex` / `getLastIndex` 全部从这条排列上取，
+- **洗牌周期（shuffle cycle）**：队列被 Fisher-Yates 洗成一条全序，`getNextIndex` /
+  `getPreviousIndex` / `getFirstIndex` / `getLastIndex` 全部从这条序上取，
   四个问题的答案**必然自洽**。
 - **一条 cycle 播完才重洗**：cycle 内每首恰好一次。`onMediaItemTransition` **不再**
   `invalidate()`（旧代码每次换歌丢掉整条序，是「随机听起来不随机」的根因）。
 - **周期交界处锚定当前曲**：cycle 走到底时 `RandomShuffle.cycleFrom(size, anchor)`
   以刚播完的歌为第 0 位重洗，所以既不会「一轮最后一首 = 下一轮第一首」，也不漏歌。
 - **不是「独立均匀抽样」**：v5.3.1–v5.3.5 曾经是每次问都独立抽样，这正是
-  v5.3.6 修掉的 bug 来源（见下面第 4 条）。任何文档若还说「允许重复、没有排列」，
+  v5.3.6 修掉的 bug 来源（见下面第 4 条）。任何文档若还说「允许重复、没有序」，
   那是过期描述。
 - **上一首 = 播放历史回退**：`prev()` 走 `PlayHistory`（容量 200），不是「再抽一次随机」，
   也不是「cycle 的前一位」——后者是一首本轮还没播过的歌，听起来像往前跳。
@@ -256,12 +260,12 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
    → `RandomShuffleCloneTest`（7 项）
 
 4. **per-position 独立抽样**（v5.3.6）— `ShuffleOrder` 在 media3 契约里是一条
-   **全序排列**，而旧实现对每个源位置各抽一次。于是 `getFirstIndex()` 拿到的锚点
+   **全序**，而旧实现对每个源位置各抽一次。于是 `getFirstIndex()` 拿到的锚点
    和从它出发走 `getNextIndex` 得到的序列无关：`hasNextWindow` 说「没有下一首」，
    `getNextWindowIndex` 却给出索引；`MediaPeriodQueue` 重建下一项时拿到 -1。
    应用侧表现就是**通知栏/锁屏/车机的「下一首」按了没反应**，而 App 内按钮（绕过
    ExoPlayer 直接改队列）却是好的——这个不对称是定位这条根因的关键线索。
-   修法：整条队列洗成一条排列，四个问题共用它。
+   修法：整条队列洗成一条全序，四个问题共用它。
    → `RandomShuffleOrderTest`（11 项）+ `ShuffleStallProbe`（8 项）
 
 5. **`MediaControllerImplBase.seekToNextMediaItem()` 的双动作**（v5.3.6）— 它先让
@@ -270,7 +274,7 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
    `PlayerController` 的 App 内按钮绕过了这条路径，但系统通知绕不过。
    这与第 4 条同源：只有一条自洽的全序才能让两次计算给出同一个答案。
 
-6. **每次换歌都丢掉整条排列**（v6.0 及以前）— `onMediaItemTransition` 里
+6. **每次换歌都丢掉整条序**（v6.0 及以前）— `onMediaItemTransition` 里
    `if (changed) shuffleState.invalidate()`，加上按钮各调 `redrawNext`，
    两条路径都在做「在其余 n−1 首里均匀抽样」。20 首队列前 10 首出现重复的概率
    约 89%。修法：换歌不再 invalidate（cycle 跨曲存活）、按钮改走 `nextIndex`。
@@ -302,8 +306,8 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
 `app/build.gradle` 顶部是**单一真相来源**，`defaultConfig` 与 `versionedApk` 都读它：
 
 ```groovy
-ext.appVersionCode = 26
-ext.appVersionName = "6.2.0"
+ext.appVersionCode = 1
+ext.appVersionName = "1.0.0"
 ```
 
 改版本只改这两行，**不要**去动 `defaultConfig`。
@@ -314,7 +318,7 @@ QQ（及多数 IM 文件传输）**按「文件名 + 大小」去重**。此前�
 `app-debug.apk`，且相邻版本字节数相同（都是 23182253 B），
 所以发新包给用户，QQ 认为「这个文件我已经有了」，**不认是新安装包**。
 
-`versionedApk` 把产物复制成 `jijian-music-6.2.0-vc26-debug.apk`——文件名唯一，问题消失。
+`versionedApk` 把产物复制成 `jijian-music-1.0.0-vc1-debug.apk`——文件名唯一，问题消失。
 
 ### 签名
 
@@ -411,6 +415,20 @@ python -X utf8 _x.py
 
 ## 九、已知问题与技术债（接手后建议优先处理）
 
+### V1.0 变更（重新编号首发 + 两处播放修复）
+
+版本号从 `6.2.0 / vc26` 回到 **`1.0.0` / `vc1`**，作为正式首发编号；版本号不再表示
+「迭代次数」，而是「对外发布序号」。三个改动：
+
+| 缺陷 | 根因 | 修法 | 回归 |
+|---|---|---|---|
+| 随机播放要按几次「下一首」才真的跳 | `RandomShuffleState.nextIndex()` 在走到全序末位时**在查询内部**重洗（`drawn()` 无条件 `cyclesDrawn++` + `generation.bump()`）。media3 一次决策会反复问 `getNextIndex`（`hasNext`、通知栏按钮、`MediaPeriodQueue`），于是同一个决策拿到**两条不同的洗牌全序**；app 按钮与媒体会话共享同一 state，任一侧重画就让另一侧错位，周期在非边界处被截断 | `nextIndex()` 改为**纯查询**（画序仅发生在 `orderFor` 缺失时，末位只做防御性回绕，且跳过刚播完的那首）；新增 `advanceCycle(size, current)` 作为**周期推进的唯一入口**，只在真的换了歌时调用（`onMediaItemTransition` 与 `playIndex` 两处），且幂等 | `RandomShuffleStateTest`（20，新增 `queryingAtTheCycleEndDoesNotRedrawIt`、`rollingTheCycleTwiceForTheSameTrackIsHarmless`、`queryingAtTheCycleEndNeverAnswersWithTheTrackThatJustPlayed`）、`ShuffleStallProbe`（8） |
+| 耳机/蓝牙/锁屏「上一首」把当前曲从头重播 | `BasePlayer.seekToPrevious()` ≠ `seekToPreviousMediaItem()`：它先比对 `getCurrentPosition() <= getMaxSeekToPreviousPosition()`（media3 默认 3000ms），**超过就 `seekToCurrentItem(0)` = 重播当前曲**。这个默认是为播客「回退几秒」设计的，对音乐播放器是错的 | `PlaybackService` 里 `ExoPlayer.Builder().setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)`，让阈值条件不可达，每次「上一首」都走 `seekToPreviousMediaItemInternal`。app 内按钮本来就不受影响（直连 `PlayerController.prev()`） | 反汇编确证 + 手动真机 |
+| 版本号语义混乱 | 6.x 系列累积到 vc26，对外发布序号没有意义 | `ext.appVersionCode = 1` / `ext.appVersionName = "1.0.0"`，产物 `jijian-music-1.0.0-vc1-debug.apk` | `aapt2 dump badging` = `versionCode='1' versionName='1.0.0'` |
+
+> **注意升级路径**：`versionCode` 从 26 降到 1，Android 会把它当成**降级**，
+> `adb install` 需带 `-d`，用户侧覆盖安装会被系统拒绝，必须卸载重装。
+
 ### v6.2.0 变更（本轮已落地：一轮 code-review Standards + Spec 双轴 + 缺陷探测）
 
 **无新功能**，全部是「app 与自己意见不一致」的收口。逐条见 README 的 v6.2.0 章节。
@@ -420,7 +438,7 @@ python -X utf8 _x.py
 | 通知栏/锁屏「上一首」仍往前跳 | app 按钮走 `PlayHistory`，但媒体会话问的是 `RandomShuffleOrder.getPreviousIndex`，它答「本轮 cycle 的前一位」= 本轮还没播过的歌（正是 ADR 0001 判为错误的行为） | `RandomShuffleOrder` 加可选 `previousOf: ((Int) -> Int)?`；`PlayerController.installShuffleOrder()` 传入 `history.confirmBack()` 映射，栈空返回 `-1`（media3 读作重播当前曲） | `RandomShuffleOrderTest`（14）、`playHistoryHookAnswersPrevious` |
 | 连按两次「上一首」后历史错乱 | `PlayHistory.expected` 是**单槽**，而 `prev()` 落地是异步的（`playAt` → `scope.launch { playIndex }`），第二次按会覆盖第一次的认领 | `expected` 改 `LinkedHashSet<String>` | `PlayHistoryTest`（9） |
 | 在线队列播第 4 首却显示第 1 首 | `onMediaItemTransition` 把播放器报的 index 直接当队列槽位；单曲模式（`playIndex`，用于恢复与在线曲）ExoPlayer 永远报 0 | 新增 `player/QueueIndex.kt`：先按 **mediaId** 查槽位，查不到回退 reported index，再不行返 -1 让回调被忽略 | `QueueIndexTest`（5） |
-| 克隆体重洗周期后安装器看不见分叉 | media3 每次 playlist mutation 都 clone `ShuffleOrder`；克隆体重画自己的 cycle 时原实例 `generation` 不动 → `installShuffleOrder` 的 version guard 判定「没变」，而播放器已在走另一条排列 | `generation: Int` → 共享对象 `ShuffleGeneration`（克隆体按引用持有，任一拷贝 bump 全体可见） | `RandomShuffleCloneTest`（7） |
+| 克隆体重洗周期后安装器看不见分叉 | media3 每次 playlist mutation 都 clone `ShuffleOrder`；克隆体重画自己的 cycle 时原实例 `generation` 不动 → `installShuffleOrder` 的 version guard 判定「没变」，而播放器已在走另一条序 | `generation: Int` → 共享对象 `ShuffleGeneration`（克隆体按引用持有，任一拷贝 bump 全体可见） | `RandomShuffleCloneTest`（7） |
 | 队列走一半被换掉 | `firstIndex`/`lastIndex` 用**无锚**洗牌，而 media3 在建 period queue / seekToFirst 时会问这两个 | 记住 `lastKnown` 作为锚，无有效锚时才退化为无锚洗牌 | `RandomShuffleStateTest`（17） |
 | 暂停中的歌被当成 stuck buffer 强行播回来 | 进度循环把 `playing = c.isPlaying` 喂给 watchdog，但 buffering 分支**不看** playing；暂停 + 缓冲 20s 后升级 REBUFFER，两个处理器最后都 `play()` | 进度循环先查 `playWhenReady`，为 false 时 `watchdog.reset()` 并跳过观察 | `StallWatchdogTest`（8） |
 | 在线队列上按下一首没反应 | `next()`/`prev()` 先 `ensureMirrorPlaylist()`，失败就 `return`（任何含不可同步解析项的队列都会失败） | 加 `mirror: Boolean` 参数：app 按钮传 `false` 走单曲 `playIndex`，媒体会话传 `true` 拿 playlist；镜像失败改为记日志 | `ShuffleStallProbe`（8） |
@@ -470,7 +488,7 @@ python -X utf8 _x.py
    APK 体积与文件名、`ui/neon/` 目录、`(current)` 标记（v6.0.0 之前所有章节的
    `(current)` 都已去掉，只有最前面的 v6.0.0 是当前版本）、以及
    **§5 的随机播放语义**——原文还写着「独立均匀抽样、允许重复」，那是 v5.3.5 的
-   描述，v5.3.6 已改成全序排列。
+   描述，v5.3.6 已改成整条全序。
 
 1. **文档与代码冲突时改文档**，不要反向迁就旧描述。
 
@@ -526,19 +544,20 @@ python -X utf8 _x.py
 
 ## 十、测试
 
-**214 项 / 25 个测试类 / 0 失败**（v6.2.0 实测）。全部是 JVM 单元测试（`app/src/test/java/`），
+**217 项 / 25 个测试类 / 0 失败**（V1.0 实测）。全部是 JVM 单元测试（`app/src/test/java/`），
 **不需要设备**。
 
 > 历史：接手时 144 项 / 17 类；v5.3.6 起 161 项 / 19 类（`ShuffleStallProbe` 5 项）；
 > v6.0.0 起 169 项 / 20 类（新增 `NeonTokensTest` 8 项）；
 > v6.1.0 起 187 项 / 22 类，v6.1.1 起 196 项 / 23 类，v6.2.0 起 214 项 / 25 类（新增 `StallWatchdogTest` 7、`EqProfileTest` 7、`PlayHistoryTest` 9、`QueueIndexTest` 5、`SettingsRoundTripTest` 9，
-> `ShuffleStallProbe` 5→8，`RandomShuffleStateTest` 16→17）。
+> `ShuffleStallProbe` 5→8，`RandomShuffleStateTest` 16→17）；
+> **V1.0 起 217 项 / 25 类**（`RandomShuffleStateTest` 17→20，新增「查询不重画周期」「重复推进无害」「末位回绕不返回当前曲」三项）。
 
 | 测试类 | 项数 | 覆盖 |
 |---|---|---|
 | `EmbeddedLyricsTest` | 18 | ID3v2/FLAC/Ogg/MP4 内嵌歌词解析 |
 | `PlayStatsTest` | 17 | 日/周分桶、排行、时区（固定 `Asia/Shanghai`） |
-| `RandomShuffleStateTest` | 17 | **v6.1**：洗牌周期契约——一条 cycle 覆盖全队列、换歌不重洗（`cycles == 1`）、周期起点问 prev 返回 -1 |
+| `RandomShuffleStateTest` | 20 | **v6.1**：洗牌周期契约——一条 cycle 覆盖全队列、换歌不重洗（`cycles == 1`）、周期起点问 prev 返回 -1；**V1.0**：`nextIndex` 是纯查询，末位询问 20 次也不重画（`queryingAtTheCycleEndDoesNotRedrawIt`）、`advanceCycle` 重复调用只推进一次 |
 | `LocalLibraryTest` | 15 | 分组、搜索、排序 |
 | `QueueLogicTest` | 12 | 队列增删移纯逻辑 |
 | `RandomShuffleOrderTest` | 14 | `ShuffleOrder` 契约（v6.1 周期语义）+ **v6.2** `previousOf` 历史钩子 |
@@ -574,7 +593,7 @@ python -X utf8 _x.py
 `_probe_stall.ps1` 是「位置冻住」的长播探针，需要模拟器在线）：
 
 ```powershell
-& python _cnt.py     # files=25 tests=214 failures=0 errors=0
+& python _cnt.py     # files=25 tests=217 failures=0 errors=0
 ```
 
 ---
@@ -604,13 +623,14 @@ v6.1 的设计文档在 `docs/`：`GLOSSARY.md`（队列/镜像队列/洗牌周�
 
 ## 十二、接手检查清单
 
-- [ ] 确认 `D:\demo\tools\jdk17\jdk-17.0.12+7` 与 `D:\demo\android-sdk` 存在
-- [ ] 跑一次标准构建命令，确认 `BUILD SUCCESSFUL` + 214 测试 0 失败
+- [ ] 确认 `C:\Program Files (x86)\Android\openjdk\jdk-21.0.8` 与 `D:\demo\android-sdk` 存在
+- [ ] 跑一次标准构建命令，确认 `BUILD SUCCESSFUL` + 217 测试 0 失败
 - [ ] 读 `FeatureFlags.kt`（理解在线/离线边界）
 - [ ] 读 `player/RandomShuffle.kt` 的 KDoc + 六个 `RandomShuffle*` 测试类 + `ShuffleStallProbe` + `StallWatchdogTest`
 - [ ] 读 `ui/theme/OledTokens.kt` 与 `ui/neon/NeonTokens.kt`（改 UI 前必读）
 - [ ] 读本报告第九节，决定先还哪笔技术债
-- [ ] 若要真机调试：`adb install -r build/apk/jijian-music-6.2.0-vc26-debug.apk`
+- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.0.0-vc1-debug.apk`
+      （`-d` 必需：`versionCode` 从 26 降到 1，系统默认按降级拒绝）
 
 ---
 
@@ -619,14 +639,14 @@ v6.1 的设计文档在 `docs/`：`GLOSSARY.md`（队列/镜像队列/洗牌周�
 ```powershell
 # 构建 + 出包 + 测试
 cd D:\demo\lxmusic-android
-$env:JAVA_HOME="D:\demo\tools\jdk17\jdk-17.0.12+7"; $env:ANDROID_SDK_ROOT="D:\demo\android-sdk"
+$env:JAVA_HOME="C:\Program Files (x86)\Android\openjdk\jdk-21.0.8"; $env:ANDROID_SDK_ROOT="D:\demo\android-sdk"
 .\gradlew.bat :app:assembleDebug :app:versionedApk :app:testDebugUnitTest --no-daemon --console=plain
 
 # 看 APK 版本
-D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-6.2.0-vc26-debug.apk | Select-String versionCode
+D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.0.0-vc1-debug.apk | Select-String versionCode
 
 # 验签
-D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-6.2.0-vc26-debug.apk
+D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.0.0-vc1-debug.apk
 
 # 重新生成搜索 bundle
 cd D:\demo\lx-builder; node build.mjs

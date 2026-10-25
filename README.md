@@ -1,6 +1,6 @@
 # 极简music (JiJianMusic) for Android
 
-`applicationId = com.lxmusic.android` · 当前版本 **6.2.0** (`versionCode = 26`)
+`applicationId = com.lxmusic.android` · 当前版本 **1.0.0** (`versionCode = 1`)
 
 一个从 [lyswhut/lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) 的
 音源架构出发、逐步转型为**纯本地极简音乐播放器**的 Android 应用。
@@ -91,8 +91,9 @@ exactly as in the desktop app.
 ## Building
 
 ```bash
-# Requires JDK 17 and the Android SDK (platform 34, build-tools 34.0.0)
-export JAVA_HOME=/path/to/jdk17
+# Requires JDK 21 and the Android SDK (platform 34, build-tools 34.0.0).
+# JDK 17 also works; AGP 8.5 does *not* support JDK 25.
+export JAVA_HOME=/path/to/jdk21
 export ANDROID_SDK_ROOT=/path/to/android-sdk
 ./gradlew :app:assembleDebug
 ```
@@ -242,16 +243,21 @@ jurisdiction.
 - Vinyl-style rotating album art (`RotatingArtwork`) that spins only while playing,
   with a tone arm that drops when playback starts.
 
-### Playback behaviour (V6.1)
-- **Shuffle cycles**: shuffle deals one permutation of the queue and plays every
+### Playback behaviour (V1.0)
+- **Shuffle cycles**: shuffle deals one order over the queue and plays every
   track exactly once before dealing again; the new cycle is anchored on the track
   that just finished, so the seam never repeats it. Buttons, notification,
   lockscreen, Bluetooth and automatic advance all walk the *same* cycle.
+  Since V1.0 the cycle is advanced **only** by `RandomShuffleState.advanceCycle()`
+  when a track really starts; `nextIndex()` is a pure query, so media3 asking twice
+  in one decision no longer truncates the cycle.
 - **"Previous" means the track you actually heard** — it pops a bounded play
   history (`PlayHistory`, 200 entries) instead of drawing randomly. Since V6.2 this
   holds for the media session too: `RandomShuffleOrder` asks the same history stack
   through its `previousOf` hook, so lockscreen/notification/Bluetooth prev and the
-  in-app button are one gesture.
+  in-app button are one gesture. Since V1.0 a hardware prev press always goes back
+  one track rather than restarting the current one
+  (`setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)`).
 - **Silent-stall watchdog**: if the position freezes for 8 s while the player
   still claims to be playing, the player is asked to retry; a second freeze at the
   same spot rebuilds the media source from the frozen position. Stuck buffering
@@ -295,13 +301,13 @@ jurisdiction.
 ./gradlew :app:testDebugUnitTest
 ```
 
-214 unit tests across 25 classes, all green (run `./gradlew :app:testDebugUnitTest`):
+217 unit tests across 25 classes, all green (run `./gradlew :app:testDebugUnitTest`):
 
 | Test class | Cases | Covers |
 |---|---:|---|
 | `lyric/EmbeddedLyricsTest` | 18 | ID3v2 USLT/TXXX, FLAC VorbisComment, Ogg/Opus, MP4 `©lyr`, GBK/UTF-8/BOM |
 | `data/stats/PlayStatsTest` | 17 | day/week bucketing, ranking, timezone (pinned `Asia/Shanghai`) |
-| `player/RandomShuffleStateTest` | 17 | **V6.1**: shuffle-cycle contract — one permutation per cycle, survives a track change, prev asks for a restart at the cycle start |
+| `player/RandomShuffleStateTest` | 20 | **V6.1**: shuffle-cycle contract — one order per cycle, survives a track change, prev asks for a restart at the cycle start; **V1.0** `nextIndex` is a pure query (20 asks at the cycle end never redraw it) and `advanceCycle` changes the order at most once per track |
 | `local/LocalLibraryTest` | 15 | search, sort orders, album/artist grouping, multi-singer split |
 | `player/RandomShuffleOrderTest` | 14 | media3 `ShuffleOrder` contract under the V6.1 cycle semantics, plus **V6.2** the history hook for `getPreviousIndex` |
 | `player/QueueLogicTest` | 12 | queue move/remove/next/prev bookkeeping |
@@ -332,6 +338,59 @@ explains the root causes behind them.
 `NeonTokensTest` is the same idea for the visual layer: it recomputes WCAG
 contrast over the *brightest possible* aurora composite on every palette, so a
 future "make it pop more" tweak cannot silently drop body text below AA.
+
+---
+
+## V1.0 — Renumbered for release, with two playback fixes (`versionCode = 1`)
+
+The version number stops counting iterations and starts counting releases: `6.2.0 / vc26`
+becomes **`1.0.0` / `vc1`**. Alongside the renumber, two long-standing playback bugs.
+
+> **Upgrade note**: `versionCode` goes *down* from 26 to 1, so Android treats this as a
+> downgrade. `adb install -d` is required, and an in-place upgrade by an end user is
+> refused by the system — it has to be uninstalled and reinstalled.
+
+### Next now actually advances, once per press
+
+`RandomShuffleState.nextIndex()` used to redraw the whole cycle **inside the query** when
+it reached the last slot of the order:
+
+```kotlin
+if (pos < size - 1) return o[pos + 1]
+return drawn(RandomShuffle.cycleFrom(size, current, random))[1]   // old
+```
+
+`drawn()` bumps `cyclesDrawn` and `generation` unconditionally, so it was not idempotent —
+despite the KDoc claiming it was. media3 asks `getNextIndex` several times per decision
+(`hasNext`, the notification button target, `MediaPeriodQueue`), and the app's own buttons
+share the same `RandomShuffleState`. Any query could therefore hand back a *different*
+order mid-decision, which truncated the cycle and left the user pressing "next"
+several times before anything moved.
+
+`nextIndex()` is now a pure query — it draws only when no order exists yet, and the
+last-slot case is a defensive wrap to `o[0]`. Cycle advancement moved to a new
+`advanceCycle(size, current)`, the **single** mutating entry point, called only when a
+track really started (`onMediaItemTransition` and `playIndex`). It is idempotent: after a
+redraw the current track sits at slot 0, so calling it twice changes nothing.
+
+### A headset "previous" goes back one track, never restarts this one
+
+`BasePlayer.seekToPrevious()` is not `seekToPreviousMediaItem()`. It first compares
+`getCurrentPosition()` against `getMaxSeekToPreviousPosition()` (media3's default is
+3000 ms) and, past that threshold, calls `seekToCurrentItem(0, …)` — i.e. it replays the
+current track from the top. That default exists for podcast "skip back a few seconds"
+UIs and is exactly wrong for a music player. `PlaybackService` now builds the player with
+`setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)`, making the threshold unreachable so
+every press takes the `seekToPreviousMediaItemInternal` branch. The on-screen prev button
+was never affected: it calls `PlayerController.prev()` directly and never goes through
+`BasePlayer.seekToPrevious()`.
+
+### Verification
+
+`./gradlew :app:assembleDebug :app:versionedApk :app:testDebugUnitTest` →
+**217 tests / 25 classes / 0 failures**; APK
+`build/apk/jijian-music-1.0.0-vc1-debug.apk` (23,399,318 B), `versionCode = 1`,
+`versionName = 1.0.0` (confirmed with `aapt2 dump badging`).
 
 ---
 
@@ -371,7 +430,7 @@ reported position, then gives up (-1) so the callback is ignored instead of lyin
 media3 clones the `ShuffleOrder` on every playlist mutation, and a clone that redraws
 its own cycle used to leave the live instance's `generation` untouched — the
 `installShuffleOrder()` version guard then saw "nothing changed" while the player was
-walking a different permutation. `generation` is now a small shared
+walking a different order. `generation` is now a small shared
 `ShuffleGeneration` object that clones hold by reference, so a redraw on any copy
 bumps the counter everyone reads. `firstIndex`/`lastIndex` also stopped drawing an
 unanchored order (media3 asks for them while building the period queue, which used to
@@ -489,13 +548,13 @@ Plan and acceptance record: [docs/v6.1-refactor-plan.md](docs/v6.1-refactor-plan
 ### 随机播放：一条 cycle 播完才重洗
 
 Before, `onMediaItemTransition` called `shuffleState.invalidate()` on *every* track
-change, throwing away the whole permutation; `next()`/`prev()` separately called
+change, throwing away the whole order; `next()`/`prev()` separately called
 `redrawNext`/`redrawPrevious`, drawing a fresh order per press. Both paths
 independently sampled the remaining tracks — i.e. uniform random over the other
 N−1, with repeats legal. Over a 20-track queue the chance of hearing a repeat
 within the first 10 tracks was ≈89%.
 
-Now one permutation (**shuffle cycle**) survives track changes. A cycle plays each
+Now one order (**shuffle cycle**) survives track changes. A cycle plays each
 track exactly once; only when it runs out does `RandomShuffle.cycleFrom(size, anchor)`
 deal a new one, anchored on the track that just finished so the seam never replays
 it. Buttons, notification, Bluetooth, lock screen and automatic advance all walk
@@ -631,13 +690,13 @@ for the sequential path; under shuffle a cycle always has a next track.
 - 新增 `ui/neon/NeonTokensTest`（8 项）：8 套调色板 × 3 段渐变的最亮极光叠加后
   正文仍 ≥4.5:1；`AURORA_PEAK` 锁在 0.34；极光周期 ≥8s 且两两相差 ≥3s；开关反馈 ≤300ms。
 - 全量 **169 项 / 20 类 / 0 失败**（v6.0.0 当时的基线；v6.1.0 起为 187 项 / 22 类，
-  v6.1.1 起为 196 项 / 23 类，v6.2.0 起为 214 项 / 25 类）。
+  v6.1.1 起为 196 项 / 23 类，v6.2.0 起为 214 项 / 25 类，V1.0 起为 217 项 / 25 类）。
 - 产物 `build/apk/jijian-music-6.0.0-vc23-debug.apk`（23558018 B，`versionCode = 23`、
   `versionName = 6.0.0`、label `极简music`，已用 `aapt2 dump badging` 核对）。
 
 ---
 
-## v1.1 — Local library, playlists & grouping
+## v1.1 — Local library, playlists & grouping (old numbering, superseded)
 
 ### Local library views
 - **Group by songs / album / artist** (`LocalGroup`). Album and artist views
@@ -668,7 +727,7 @@ and `play_history` tables (`MusicRepository` is the single access point).
 
 ---
 
-## v1.2 — Queue, sorting & equalizer
+## v1.2 — Queue, sorting & equalizer (old numbering, superseded)
 
 ### Play queue
 - New **queue screen** opened from the top bar or the now-playing screen.
@@ -706,9 +765,9 @@ and `play_history` tables (`MusicRepository` is the single access point).
 - 版本 versionCode=8 / versionName=5.2.0。
 ## v5.3 — True-shuffle unification & home resume card
 
-> **历史章节。** v5.3 的地基是「洗牌袋」：一个 Fisher-Yates 排列，一轮内每首
+> **历史章节。** v5.3 的地基是「洗牌袋」：一条 Fisher-Yates 全序，一轮内每首
 > 恰好播一次，并靠 `BagShuffleOrder` 把这只袋子适配给 ExoPlayer，让通知栏/
-> 锁屏/蓝牙的「下一首」和 App 内按钮走同一个排列。这一整套设计（`ShuffleBag`
+> 锁屏/蓝牙的「下一首」和 App 内按钮走同一条序。这一整套设计（`ShuffleBag`
 > / `BagShuffleOrder`）在 v5.3.1 已被判定为错误语义并整体删除。保留本章仅为
 > 追溯历史，不代表当前行为。
 
@@ -719,10 +778,10 @@ and `play_history` tables (`MusicRepository` is the single access point).
   consumed the bag. `player/BagShuffleOrder.kt` then adapted the bag to media3's
   `ShuffleOrder` interface and `PlayerController.installShuffleOrder()` pushed it
   to the real `ExoPlayer` via `PlayerHolder`, so both paths walked the *same*
-  permutation. `onMediaItemTransition` syncs `shuffleCursor` back to whatever
+  order. `onMediaItemTransition` syncs `shuffleCursor` back to whatever
   ExoPlayer actually landed on.
 - **Is it "true random"?** Yes, in the sense that matters for a player: each
-  round is a uniform Fisher-Yates permutation generated by `kotlin.random.Random`,
+  round is a uniform Fisher-Yates order generated by `kotlin.random.Random`,
   every track appears exactly once per round, and a new round is reshuffled when
   the bag is exhausted (`ShuffleBagTest.firstSlotIsUniformAcrossSeeds`,
   `everySeedProducesAPermutation`, `freshRoundsAreNotIdentical`). It is *not*
@@ -745,8 +804,8 @@ and `play_history` tables (`MusicRepository` is the single access point).
 
 1. **`BagShuffleOrder.cloneAndInsert` / `cloneAndRemove` 重新发牌**。
    ExoPlayer 在 `addMediaItems` / `removeMediaItem` 时会克隆它的
-   `ShuffleOrder`；旧实现直接拿 `size` 又发一副**全新随机排列**，
-   于是镜像队列走的排列与应用内 `shuffleOrder` 彻底脱钩。
+   `ShuffleOrder`；旧实现直接拿 `size` 又画一条**全新随机序**，
+   于是镜像队列走的序与应用内 `shuffleOrder` 彻底脱钩。
    现在保持旧有相对顺序，新索引插到它们在播放列表里的位置。
 2. **`playAt()` 不同步 cursor**。从队列页直接点某首歌时，
    游标停在旧槽位 → 下一次「下一首」从错误的地方出发。现在切到
@@ -762,7 +821,7 @@ and `play_history` tables (`MusicRepository` is the single access point).
 
 | API | 语义 |
 | --- | --- |
-| `build(size)` | Fisher-Yates 全排列（一轮一遍） |
+| `build(size)` | Fisher-Yates 全序（一轮一遍） |
 | `redeal(size, avoid)` | 新一轮，不以 `avoid` 开头（歌曲自然播完时） |
 | `redealAfter(size, current)` | 新一轮，`current` 占槽 0（跳歌跨轮时，不中断当前曲） |
 | `roundTail(order)` | 上一轮末尾槽位 |
@@ -975,7 +1034,7 @@ come back immediately — that is what was asked for and it is now the contract.
   repeat = OFF pass has been through `size` tracks.
 - Notification / lock screen / Bluetooth / fluid-cloud next/previous — go through
   the same `RandomShuffleState`, because `RandomShuffleOrder.getNextIndex()` draws
-  live on every call rather than walking a fixed permutation.
+  live on every call rather than walking a fixed order.
 
 ### Files
 
