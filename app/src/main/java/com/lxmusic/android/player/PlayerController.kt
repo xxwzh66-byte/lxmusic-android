@@ -52,11 +52,20 @@ data class PlayerState(
  * Drives ExoPlayer. Local tracks play straight from their file / content Uri;
  * online tracks resolve a stream URL through the custom-source [SourceManager].
  *
- * V6.1: shuffle is a **cycle** - one shuffle order is consumed front to back so a
- * full pass plays every track exactly once, then a new pass is drawn anchored
- * on whichever track is playing. "Previous" does not walk that order; it
- * walks the real play history (see [PlayHistory]), because the order's
- * predecessor is a track this pass has not reached yet.
+ * V1.0.1: shuffle is a **fresh draw per decision, in both directions**.
+ *
+ * Every press of next picks a uniform random slot other than the current one;
+ * every press of previous does the same. There is no shuffle cycle any more -
+ * a cycle meant the order of a pass was fixed the moment it was drawn, which is
+ * exactly the "the play order is not random, it is fixed" complaint. "Previous"
+ * is not a walk back through a remembered stack either: the user asked for it to
+ * be random too.
+ *
+ * What keeps the two decision paths honest is that app buttons and ExoPlayer's
+ * installed [RandomShuffleOrder] share one [RandomShuffleState], and that state
+ * memoises one draw per (direction, track) so media3's several questions inside
+ * a single decision all get the same answer. The memo is dropped by
+ * [RandomShuffleState.onTrackStarted] - i.e. when a track really starts.
  */
 class PlayerController(
     private val context: Context,
@@ -76,7 +85,7 @@ class PlayerController(
     @Volatile
     private var controller: MediaController? = null
 
-    /** Invoked when a track begins playing (used to record history). */
+    /** Invoked when a track begins playing (used by the UI for scrobbling). */
     var onTrackStarted: ((MusicInfo) -> Unit)? = null
 
     /**
@@ -107,11 +116,35 @@ class PlayerController(
     var repeatMode: RepeatMode = RepeatMode.OFF
 
     /**
-     * True while [queue] is mirrored 1:1 into the ExoPlayer playlist, enabling
-     * native next/previous commands from the media notification, lockscreen,
-     * bluetooth and fluid-cloud. False = legacy single-item mode (online sources).
+     * V1.1: the shuffle order's two operations, as the seam [QueueMirror] drives.
+     *
+     * Naming the pair was the point: `installShuffleOrder()` and
+     * `forgetInstalledOrder()` were always called together with a playlist edit
+     * in between, but nothing said so, and one call site got the order wrong.
      */
-    private var playlistMode = false
+    private val shuffleSink = object : ShuffleSink {
+        override fun install(): Boolean = installShuffleOrder()
+
+        override fun dropInstalled() = forgetInstalledOrder()
+    }
+
+    /**
+     * V1.1: keeps the player's playlist a 1:1 mirror of [queue].
+     *
+     * Owns what used to be `playlistMode` plus the five-step edit sequence that
+     * eight methods had copy-pasted. See [QueueMirror] for the reasoning.
+     */
+    private val mirror = QueueMirror(
+        sink = shuffleSink,
+        queue = { queue },
+        itemOf = { m -> resolvableUri(m)?.let { buildMediaItem(m, it) } },
+        currentSlot = { currentIndex },
+        selectSlot = { currentIndex = it },
+        repeatFlag = { repeatMode.toPlayerRepeatMode() },
+        shuffleFlag = { shuffle },
+        isPlaying = { _state.value.isPlaying },
+        onQueueMutated = { resetShuffle() },
+    ).also { it.target = PlayerTarget { controller } }
 
     /** Lyric timing calibration in milliseconds (positive = lyrics appear earlier). */
     var lyricOffsetMs: Int = 0
@@ -128,36 +161,10 @@ class PlayerController(
      * and by the [RandomShuffleOrder] handed to ExoPlayer, so both draw from the
      * same source.
      *
-     * V6.1: the policy is a *cycle* — one shuffle order is consumed front to back,
-     * so a pass plays every track exactly once before it is redrawn anchored on
-     * the current track. It survives a track change; only a queue edit or a mode
-     * flip invalidates it. (The old KDoc here described independent uniform
-     * sampling, which is what the code did before V6.1 and is now wrong.)
+     * V1.0.1: one uniform draw per decision, in both directions. See the class
+     * KDoc - the cycle is gone, because a cycle fixes the play order.
      */
     val shuffleState = RandomShuffleState()
-
-    /**
-     * V6.1: where "previous" goes in shuffle mode.
-     *
-     * See [PlayHistory] for why this is a stack and not the shuffle order's
-     * predecessor.
-     */
-    private val history = PlayHistory()
-
-    /**
-     * Records that playback moved to [toIndex] from [fromIndex].
-     *
-     * V6.1.2: both transition paths (ExoPlayer's own [onMediaItemTransition] and
-     * the app-driven [playIndex]) used to call [PlayHistory.onTrackChanged]
-     * directly, with subtly different guards. One helper means "history sees
-     * every move exactly once" is a property of one function instead of a
-     * convention two call sites have to keep agreeing on.
-     */
-    private fun recordMove(fromIndex: Int, toIndex: Int) {
-        if (fromIndex == toIndex) return
-        val to = queue.getOrNull(toIndex) ?: return
-        history.onTrackChanged(to.id, queue.getOrNull(fromIndex)?.id)
-    }
 
     /** V5.1-4: notified whenever the user flips repeat/shuffle. */
     var onModeChanged: ((RepeatMode, Boolean) -> Unit)? = null
@@ -227,32 +234,26 @@ class PlayerController(
                     val music = queue.getOrNull(i) ?: return
                     if (currentIndex == i && _state.value.current?.id == music.id) return
                     val changed = currentIndex != i
-                    val left = currentIndex
                     currentIndex = i
                     if (changed) {
                         // V6.1: a new track starts from zero, so a freeze count
                         // inherited from the previous one would escalate on the
                         // very first tick.
                         watchdog.reset()
-                        // V6.1: the cycle now **survives** a track change. The
-                        // old code called `shuffleState.invalidate()` here, which
-                        // threw the whole shuffle order away on every transition -
-                        // that is exactly why shuffle degenerated into "sample
-                        // one track uniformly at random, repeatedly" (A->B->A
-                        // was allowed) and why the installed order churned.
-                        recordMove(left, i)
                     }
-                    // V1.0: the ONE place the shuffle cycle advances. Doing it
-                    // on the transition (instead of inside `nextIndex`) keeps
-                    // the query free of side effects, so media3's several
-                    // questions per decision all get the same cycle, and each
-                    // cycle is consumed exactly once no matter how often it asks.
-                    if (changed && shuffle) {
-                        // 走完一轮：新序已经画好，必须重新装给 ExoPlayer，
-                        // 否则通知栏还在按上一轮的序回答「下一首」。
-                        val cycled = shuffleState.advanceCycle(queue.size, i)
-                        if (cycled) installShuffleOrder()
-                    }
+                    // V1.0.1: the ONE place the draw memo is dropped for every
+                    // path media3 itself drives - notification, lockscreen,
+                    // bluetooth, car head unit, and the native auto-advance.
+                    //
+                    // 这里不能像 v5.3.2 那样调 `invalidate()`：那会把 lastTrack
+                    // 也清掉，于是「上一首避开刚听完的那首」失去依据，而且会让
+                    // generation 无谓递增、逼安装点重装 order。`onTrackStarted`
+                    // 只丢两个抽样缓存。
+                    //
+                    // app 按键那条路径不经过这里时由 playIndex 自己调一次，两条
+                    // 路径各自负责自己的那一半（见 RandomShuffleState.onTrackStarted
+                    // 的 KDoc 上写的「任一路径漏掉」的后果）。
+                    if (changed) shuffleState.onTrackStarted(queue.size, i)
                     _state.value = _state.value.copy(
                         current = music, error = null, positionMs = 0, durationMs = 0,
                         lyric = Lyric(emptyList()), lyricIndex = -1,
@@ -267,20 +268,21 @@ class PlayerController(
     }
 
     private fun onTrackEnded() {
-        if (playlistMode) return  // queue advance/repeat is driven natively by ExoPlayer
+        if (mirror.isMirrored) return  // queue advance/repeat is driven natively by ExoPlayer
         when (repeatMode) {
             RepeatMode.ONE -> playAt(currentIndex)
             else -> scope.launch { advanceAfterTrackEnd() }
         }
     }
 
-    /** Auto advance when a track finishes: the shuffle cycle, or the next queue slot. */
+    /** Auto advance when a track finishes: a fresh shuffle draw, or the next queue slot. */
     private suspend fun advanceAfterTrackEnd() {
         if (queue.isEmpty()) return
         if (shuffle) {
-            // V6.1: walk the same cycle the buttons walk. The old code drew a
-            // brand new order here (`redrawNext`), which is why the
-            // auto-advance path and the notification path could disagree.
+            // V1.0.1: the auto-advance path is a decision like any other, so it
+            // draws. (V6.1 made it walk the cycle so it could not disagree with
+            // the buttons; with the cycle gone the same guarantee comes from the
+            // shared memo instead - one draw per decision, whoever asked.)
             if (queue.size <= 1) return
             val target = shuffleState.nextIndex(queue.size, currentIndex)
             if (target < 0) return
@@ -293,38 +295,15 @@ class PlayerController(
 
     fun setQueue(list: List<MusicInfo>, startIndex: Int) {
         queue.clear(); queue.addAll(list); currentIndex = startIndex
-        // V6.1.1: the old queue is gone, so every id in the history points at a
-        // list that no longer exists - "previous" would jump to an unrelated
-        // track, or fail the lookup and silently eat the entry.
-        history.clear()
         resetShuffle()
         publishQueue()
-        if (tryMirrorPlaylist(startIndex)) return
+        if (mirror.replace(queue, startIndex)) {
+            attachEqualizer()
+            return
+        }
         scope.launch { playIndex(currentIndex) }
     }
 
-    /**
-     * G1: if every track in [queue] resolves synchronously (local files),
-     * mirror the whole list into the player so the system media notification
-     * gets next/previous. Returns false when a track needs async URL
-     * resolution (online sources) - caller falls back to single-item mode.
-     */
-    private fun tryMirrorPlaylist(startIndex: Int): Boolean {
-        val c = controller ?: return false
-        val uris = queue.map { resolvableUri(it) }
-        if (uris.any { it == null }) return false
-        playlistMode = true
-        val items = uris.mapIndexed { i, u -> buildMediaItem(queue[i], u!!) }
-        forgetInstalledOrder()
-        c.setMediaItems(items, startIndex, 0L)
-        c.shuffleModeEnabled = shuffle
-        installShuffleOrder()
-        c.repeatMode = repeatMode.toPlayerRepeatMode()
-        c.prepare()
-        c.play()
-        attachEqualizer()
-        return true
-    }
 
     /**
      * URI for a local track's file, or null when it carries no path.
@@ -376,7 +355,7 @@ class PlayerController(
      */
     fun playAt(i: Int) {
         if (i !in queue.indices) return
-        if (playlistMode) {
+        if (mirror.isMirrored) {
             if (PlayerHolder.player?.mediaItemCount == queue.size) {
                 controller?.seekTo(i, 0L)
                 controller?.play()
@@ -384,9 +363,9 @@ class PlayerController(
             }
             // V6.1.2: the mirror was *just* requested. MediaController dispatches
             // playlist edits to the session asynchronously, so mediaItemCount is
-            // still the old one right after ensureMirrorPlaylist() returned true.
-            // Falling through to playIndex() here set `playlistMode = false` and
-            // silently undid the mirror - the first shuffle press after a
+            // still the old one right after mirror.ensure() returned true.
+            // Falling through to playIndex() here cleared the mirror and
+            // silently undid it - the first shuffle press after a
             // single-track restore walked one track and lost the playlist.
             // Defer the seek to the timeline event that lands the edit.
             pendingSeekIndex = i
@@ -435,25 +414,15 @@ class PlayerController(
      * Returns true when the queue is now mirrored and [playAt] may seek by
      * index. Playback is preserved: the current track stays selected and keeps
      * playing.
+     *
+     * V1.1: the work moved to [QueueMirror.ensure]; this stays so the shuffle
+     * paths read the same and so the queue gets published on the one branch that
+     * changed the current slot.
      */
     private fun ensureMirrorPlaylist(): Boolean {
-        if (playlistMode && PlayerHolder.player?.mediaItemCount == queue.size) return true
-        if (queue.size < 2) return false
-        val c = controller ?: return false
-        val uris = queue.map { resolvableUri(it) }
-        if (uris.any { it == null }) return false
-        playlistMode = true
-        val items = uris.mapIndexed { i, u -> buildMediaItem(queue[i], u!!) }
-        val keep = currentIndex.coerceIn(0, items.lastIndex)
-        currentIndex = keep
-        forgetInstalledOrder()
-        c.setMediaItems(items, keep, 0L)
-        c.shuffleModeEnabled = shuffle
-        c.repeatMode = repeatMode.toPlayerRepeatMode()
-        installShuffleOrder()
-        if (_state.value.isPlaying) c.play()
-        publishQueue()
-        return true
+        val ok = mirror.ensure()
+        if (ok) publishQueue()
+        return ok
     }
 
     // ---------------- queue editing ----------------
@@ -461,24 +430,10 @@ class PlayerController(
     /** Append tracks to the end of the queue. */
     fun enqueue(list: List<MusicInfo>) {
         if (list.isEmpty()) return
-        val base = queue.size
         queue.addAll(list)
         resetShuffle()
         publishQueue()
-        if (playlistMode) {
-            val c = controller ?: return
-            val added = list.mapIndexed { i, m -> buildMediaItem(m, resolvableUri(m)) }
-            if (added.any { it.localConfiguration == null }) {
-                // online track joined a mirrored playlist: rebuild entirely
-                forgetInstalledOrder()
-                c.setMediaItems(queue.map { buildMediaItem(it, resolvableUri(it)) }, currentIndex, 0L)
-                c.prepare()
-                if (_state.value.isPlaying) c.play()
-            } else {
-                c.addMediaItems(base, added)
-            }
-            installShuffleOrder()
-        }
+        mirror.insert(list, queue.size - list.size)
     }
 
     /** Insert tracks to play next (right after the current track). */
@@ -488,19 +443,7 @@ class PlayerController(
         queue.addAll(at, list)
         resetShuffle()
         publishQueue()
-        if (playlistMode) {
-            val c = controller ?: return
-            val added = list.mapIndexed { i, m -> buildMediaItem(m, resolvableUri(m)) }
-            if (added.any { it.localConfiguration == null }) {
-                forgetInstalledOrder()
-                c.setMediaItems(queue.map { buildMediaItem(it, resolvableUri(it)) }, currentIndex, 0L)
-                c.prepare()
-                if (_state.value.isPlaying) c.play()
-            } else {
-                c.addMediaItems(at, added)
-            }
-            installShuffleOrder()
-        }
+        mirror.insert(list, at)
     }
 
     /** Move a queue entry, keeping the currently-playing track selected. */
@@ -508,19 +451,7 @@ class PlayerController(
         val r = QueueLogic.move(queue, currentIndex, from, to)
         queue.clear(); queue.addAll(r.list); currentIndex = r.index
         publishQueue()
-        if (playlistMode) {
-            // V6.1: the player is moved *first*, then the order is rebuilt for
-            // the new list. The old code called resetShuffle() before
-            // moveMediaItem, which installed an order whose indices described
-            // the list *before* the move - ExoPlayer then walked a cycle over
-            // the wrong list.
-            controller?.moveMediaItem(from, to)
-            forgetInstalledOrder()
-            shuffleState.invalidate()
-            installShuffleOrder()
-        } else {
-            resetShuffle()
-        }
+        if (!mirror.move(from, to)) resetShuffle()
     }
 
     /** Remove a queue entry. If it is the current track, advance appropriately. */
@@ -529,14 +460,12 @@ class PlayerController(
         val r = QueueLogic.remove(queue, currentIndex, position)
         queue.clear(); queue.addAll(r.list); currentIndex = r.index
         if (queue.isEmpty()) {
-            playlistMode = false
-            forgetInstalledOrder()
-            controller?.clearMediaItems()
+            mirror.clear()
             _state.value = _state.value.copy(current = null, isPlaying = false)
         } else if (r.shouldPlay) {
             scope.launch { playIndex(currentIndex) }
-        } else if (playlistMode) {
-            controller?.removeMediaItem(position)
+        } else {
+            mirror.remove(position)
         }
         resetShuffle()
         publishQueue()
@@ -545,11 +474,8 @@ class PlayerController(
     fun clearQueue() {
         queue.clear()
         currentIndex = -1
-        playlistMode = false
-        history.clear()
         shuffleState.invalidate()
-        forgetInstalledOrder()
-        controller?.clearMediaItems()
+        mirror.clear()
         _state.value = _state.value.copy(current = null, isPlaying = false)
         publishQueue()
     }
@@ -592,16 +518,17 @@ class PlayerController(
      * - shuffle: the target comes from [RandomShuffleState.nextIndex] - the
      *   *same* answer ExoPlayer's installed [RandomShuffleOrder] gives the
      *   notification, lockscreen, bluetooth and auto-advance. Deliberately not
-     *   `redrawNext`: a fresh order per press would ignore the cycle the
-     *   auto-advance path is walking, and the two paths would disagree.
+     *   a separate draw of its own: the memo in [RandomShuffleState] is what
+     *   makes one decision answer consistently, and it is dropped the moment
+     *   the track starts.
      * - sequential: the next queue slot, or nothing at the end (repeat ALL
      *   wraps, repeat OFF stops - ExoPlayer honours it because the mirrored
      *   playlist has a real end).
      *
      * When the queue cannot be mirrored (an online track, or a one-track
-     * restore) the shuffle cycle still works: [playAt] falls back to a
-     * single-item play for the target, so only the *notification* buttons need
-     * the mirror. Before V6.2 this returned early and the button looked dead.
+     * restore) shuffle still works: [playAt] falls back to a single-item play
+     * for the target, so only the *notification* buttons need the mirror.
+     * Before V6.2 this returned early and the button looked dead.
      */
     suspend fun next() {
         if (queue.isEmpty()) return
@@ -611,7 +538,7 @@ class PlayerController(
             // whose URL is only known at play time, so ensureMirrorPlaylist()
             // can never succeed for it. Returning here (the old behaviour) made
             // the button a silent no-op; playAt() knows how to play a single
-            // item, so the cycle keeps working either way.
+            // item, so the button keeps working either way.
             ensureMirrorPlaylist()
             val target = shuffleState.nextIndex(queue.size, currentIndex)
             if (target < 0) return
@@ -622,53 +549,40 @@ class PlayerController(
             playAt(currentIndex + 1)
         } else if (repeatMode == RepeatMode.ALL) {
             playAt(0)
-        } else if (playlistMode) {
+        } else if (mirror.isMirrored) {
             controller?.seekToNextMediaItem()
         }
     }
 
     /**
-     * V6.2: what the notification / lockscreen / bluetooth "previous" returns.
+     * V1.0.1: "previous".
      *
-     * Those surfaces only know ExoPlayer's installed [RandomShuffleOrder]; they
-     * never call [prev]. Without this hook they walked the shuffle cycle's
-     * predecessor, which is a track this cycle has not reached yet - the exact
-     * "previous jumps forward" complaint, just from a different button.
+     * In shuffle mode this is a **fresh uniform draw**, exactly like [next] and
+     * exactly what ExoPlayer's installed [RandomShuffleOrder] answers to the
+     * notification / lockscreen / bluetooth previous button. The user asked for
+     * both directions to be random, so neither this nor the system button walks
+     * a remembered stack.
      *
-     * Read-only on purpose: media3 asks this question several times per gesture
-     * and may not follow through, so the entry must stay on the stack until
-     * [PlayHistory.onTrackChanged] sees the track actually start.
+     * Two policies came before and both are gone:
+     * - the shuffle cycle's predecessor, which is a track this pass has not
+     *   reached yet - it sounded like a random jump *forward*;
+     * - the play-history stack, which answered -1 when empty, and media3 reads
+     *   -1 as "no previous item" and restarts the current track from zero. That
+     *   is the "first headset previous replays this song" report; the fix is not
+     *   to special-case the empty stack but to stop handing media3 a -1 at all.
      *
-     * @return the player index of the history target, or -1 for "nothing behind
-     *   us" (media3 reads that as "restart the current track").
-     */
-    private fun previousFromHistory(@Suppress("UNUSED_PARAMETER") fromIndex: Int): Int {
-        val id = history.backTargetId ?: return -1
-        val target = queue.indexOfFirst { it.id == id }
-        return if (target >= 0) target else -1
-    }
-
-    /**
-     * V6.1: "previous".
-     *
-     * Walks the real play history backwards (see [PlayHistory]). In shuffle
-     * mode the order's predecessor is *not* what the user wants: it is a track
-     * this cycle has not reached yet, so it sounds like a random jump forward.
-     * With an empty history the current track simply restarts, which is what
-     * every mainstream player does at the first track.
-     *
-     * The order is untouched, so after going back the cycle continues from
-     * wherever playback lands - ExoPlayer asks the same shared state.
+     * [RandomShuffleState.previousIndex] also avoids the track that just played,
+     * so pressing previous twice in a row cannot bounce between the same two.
      */
     suspend fun prev() {
         if (queue.isEmpty()) return
         if (shuffle) {
             if (!ensureShuffleableQueue()) return
             ensureMirrorPlaylist()
-            val back = history.confirmBack()
-            val target = back?.let { id -> queue.indexOfFirst { it.id == id } } ?: -1
+            val target = shuffleState.previousIndex(queue.size, currentIndex)
             if (target < 0) {
-                // Nothing behind us: replay this track from the top.
+                // Single-track queue: nothing to draw. Restart this one, which is
+                // what every mainstream player does.
                 if (currentIndex in queue.indices) playAt(currentIndex)
                 return
             }
@@ -676,36 +590,23 @@ class PlayerController(
             return
         }
         if (currentIndex - 1 >= 0) playAt(currentIndex - 1)
-        else if (playlistMode) controller?.seekToPreviousMediaItem()
+        else if (mirror.isMirrored) controller?.seekToPreviousMediaItem()
         else playAt(0)
     }
 
     private suspend fun playIndex(i: Int) {
         val music = queue.getOrNull(i) ?: return
-        // V6.1.1: this path used to record no history at all. It sets `index`
-        // and `current` *before* setMediaItem, so onMediaItemTransition sees
-        // "unchanged" and returns early - the history push never happened for
-        // online tracks, a restored one-track queue, or any playAt that falls
-        // back from mirrored mode. prev() then popped an id that had never been
-        // pushed and lost it. Recorded here, before the state is replaced.
-        recordMove(currentIndex, i)
         currentIndex = i
-        playlistMode = false
-        // V1.0: this path sets currentIndex before setMediaItem, so
-        // onMediaItemTransition returns early and would never advance the
-        // cycle. Advance it here too - advanceCycle is idempotent, so when the
-        // transition *does* fire the second call does nothing. Unlike the
-        // transition path there is nothing to reinstall: this path drops the
-        // mirrored playlist right below (`playlistMode = false` +
-        // forgetInstalledOrder), and the next ensureMirrorPlaylist() installs
-        // the new order because the version moved.
-        if (shuffle) shuffleState.advanceCycle(queue.size, i)
-        // V6.1: the cycle is deliberately *not* invalidated here. This path is
-        // how auto-advance plays the target the cycle just picked; throwing the
-        // order away would make the next query redraw, i.e. every track would
-        // start a new cycle - the old "uniform random" behaviour under a new
-        // name. Callers that really do change the queue call [resetShuffle].
-        forgetInstalledOrder()
+        // V1.1: this path drops the mirrored playlist, so the flag has to go
+        // with it. See [QueueMirror.dropToSingleItem] for the bug that caused
+        // when the two disagreed.
+        mirror.dropToSingleItem()
+        // V1.0.1: the draw memo is deliberately *not* released here. This path
+        // sets `current` before setMediaItem, so onMediaItemTransition sees
+        // "unchanged" and returns early - which is why the release happens
+        // further down, after the URI resolves and the player really starts.
+        // Releasing it here would let a track whose source fails still count as
+        // "started". Callers that change the queue itself call [resetShuffle].
         _state.value = _state.value.copy(
             current = music, error = null, positionMs = 0, durationMs = 0,
             lyric = Lyric(emptyList()), lyricIndex = -1,
@@ -727,6 +628,14 @@ class PlayerController(
         controller?.run {
             setMediaItem(buildMediaItem(music, uri)); prepare(); play()
         }
+        // V1.0.1: release the draw memo only now that the track really plays.
+        // Running it before the URI is resolved would let a track whose source
+        // fails still count as "started", so the next press would re-serve a
+        // draw for a track nobody heard.
+        //
+        // onTrackStarted is idempotent, so the onMediaItemTransition callback -
+        // which also fires for this track - calling it again is harmless.
+        shuffleState.onTrackStarted(queue.size, i)
         attachEqualizer()
         onTrackStarted?.invoke(music)
 
@@ -833,16 +742,16 @@ class PlayerController(
      * log line: it reads like someone is watching. Both outcomes now go to
      * logcat under the same tag as the rest of the player.
      */
-    private fun installShuffleOrder() {
-        if (installingShuffleOrder) return
-        val exo = PlayerHolder.player ?: return
-        if (!shuffle || queue.isEmpty()) return
+    private fun installShuffleOrder(): Boolean {
+        if (installingShuffleOrder) return false
+        val exo = PlayerHolder.player ?: return false
+        if (!shuffle || queue.isEmpty()) return false
         val length = exo.mediaItemCount
         if (length != queue.size) {
             // Not a failure yet: the playlist edit may still be in flight. The
             // timeline listener retries once it has actually landed.
             Log.w(TAG, "shuffle order deferred: playlist=$length queue=${queue.size}")
-            return
+            return false
         }
         // V6.1: 这是「切模式卡顿」的根因所在。
         //
@@ -864,7 +773,11 @@ class PlayerController(
         // 想彻底消掉这一轮，得让 ExoPlayer 侧的 order 不再是快照（见
         // [RandomShuffleState.copy] 与 cloneAndInsert），改动面比收益大。
         val version = shuffleState.version
-        if (version == installedShuffleVersion && installedShuffleLength == length) return
+        if (version == installedShuffleVersion && installedShuffleLength == length) {
+            controller?.shuffleModeEnabled = shuffle
+            return true
+        }
+        var installed = false
         installingShuffleOrder = true
         try {
             runCatching {
@@ -872,13 +785,13 @@ class PlayerController(
                     RandomShuffleOrder(
                         size = queue.size,
                         state = shuffleState,
-                        previousOf = { index -> previousFromHistory(index) },
                     )
                 )
             }
                 .onSuccess {
                     installedShuffleVersion = version
                     installedShuffleLength = length
+                    installed = true
                 }
                 .onFailure {
                     Log.e(TAG, "shuffle order refused: playlist=$length queue=${queue.size}", it)
@@ -891,6 +804,7 @@ class PlayerController(
         // shuffleModeEnabled is on, so a queue installed before the mode flip
         // used to be walked by its internal order instead of ours.
         controller?.shuffleModeEnabled = shuffle
+        return installed
     }
 
     /** Guards [installShuffleOrder] against re-entry from its own timeline event. */
@@ -1027,14 +941,13 @@ class PlayerController(
                 return@launch
             }
             watchdog.reset()
-            forgetInstalledOrder()
             // V6.1.1: setMediaItem replaces the *whole* playlist with this one
-            // item, so the mirror is gone. Leaving playlistMode = true made
-            // playAt() keep seeking into a one-item playlist while the app queue
-            // still had N entries - every later "next" silently seeked to index
-            // 0 of a single-item list. The flag is dropped here and restored by
-            // ensureMirrorPlaylist() the next time shuffle needs the full list.
-            playlistMode = false
+            // item, so the mirror is gone. Leaving the flag set made playAt()
+            // keep seeking into a one-item playlist while the app queue still
+            // had N entries - every later "next" silently seeked to index 0 of a
+            // single-item list. restore() drops it; ensureMirrorPlaylist()
+            // rebuilds it the next time shuffle needs the full list.
+            mirror.dropToSingleItem()
             c.setMediaItem(buildMediaItem(music, uri))
             c.repeatMode = repeatMode.toPlayerRepeatMode()
             c.prepare()
@@ -1067,8 +980,7 @@ class PlayerController(
         queue.clear()
         queue.add(music)
         currentIndex = 0
-        playlistMode = false
-        history.clear()
+        mirror.dropToSingleItem()
         shuffleState.invalidate()
         _state.value = _state.value.copy(
             current = music, queue = queue.toList(), queueIndex = 0,
@@ -1103,12 +1015,11 @@ class PlayerController(
         queue.clear(); queue.addAll(list)
         currentIndex = list.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
         // V5.3.6: a restored single-track queue played as one item, so the
-        // player only ever held that item. The mode flag is dropped so the
-        // next shuffle press re-mirrors the whole context (see
+        // player only ever held that item. The mirror is dropped so the next
+        // shuffle press re-mirrors the whole context (see
         // [ensureMirrorPlaylist]); playback itself is left untouched, because
         // re-issuing it here would restart the track from zero.
-        playlistMode = false
-        history.clear()
+        mirror.dropToSingleItem()
         resetShuffle()
         publishQueue()
     }

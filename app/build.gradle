@@ -8,10 +8,14 @@ plugins {
 // Single source of truth for the version: defaultConfig and the versioned-APK
 // copy task below both read these, so they can never drift apart.
 //
-// V1.0: 版本号重新起算。此前是 5.3.x → 6.2.0 的试用期编号，从这一版开始以
-// 1.0.0 / vc1 作为正式首发，之后只在这里推进。
-ext.appVersionCode = 1
-ext.appVersionName = "1.0.0"
+// V1.0: 版本号重新起算。此前是 5.3.x → 6.2.0 的试用期编号，从 1.0.0 / vc1 作为
+// 正式首发，之后只在这里推进。
+//
+// V1.0.1: 随机播放改成「每次决策重抽一次，上下首都抽」（用户要求），耳机/蓝牙
+// 按上一首第一次会重播当前曲的问题随之修掉——根因是空历史让 order 回 -1，而
+// media3 把 -1 读成「没有上一首」并 seekToCurrentItem(0)。
+ext.appVersionCode = 2
+ext.appVersionName = "1.0.1"
 
 android {
     namespace = "com.lxmusic.android"

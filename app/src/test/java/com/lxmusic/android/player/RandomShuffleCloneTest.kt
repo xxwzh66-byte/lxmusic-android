@@ -111,21 +111,24 @@ class RandomShuffleCloneTest {
 
     @Test
     fun aRepairedOrderWalksItsWholeQueue() {
-        // V6.1: a finished cycle rolls onto a fresh one anchored on the track
-        // that just played instead of wrapping back to the first slot, so the
-        // root property is coverage - every track once before any repeat.
+        // V1.0.1: the walk is a fresh draw per step, so the property is no longer
+        // "covers every track once" - it is "never stalls and can reach every
+        // track". A repaired order that covered only part of the queue would be
+        // the old "随机播放只在几首之间跳" bug under a new name.
         val state = state()
         val repaired = RandomShuffleOrder(3, state, Random(5)).cloneAndClear().cloneAndInsert(0, 8)
-        val seen = HashSet<Int>()
+        assertEquals("repair must reach the holder count", 8, repaired.getLength())
+        val reached = HashSet<Int>()
         var cursor = repaired.getFirstIndex()
-        repeat(8) { step ->
-            assertTrue("walk revisited $cursor before covering the queue", seen.add(cursor))
+        repeat(400) {
             val next = repaired.getNextIndex(cursor)
-            assertTrue("a finished cycle must still have a successor", next in 0 until 8)
-            if (step == 7) assertNotEquals("the next cycle must not repeat the track", cursor, next)
+            assertTrue("a repaired order must always have a successor", next in 0 until 8)
+            assertNotEquals("the successor must change the track", cursor, next)
+            reached.add(next)
             cursor = next
+            state.onTrackStarted(8, cursor)
         }
-        assertEquals("the walk must cover the queue", 8, seen.size)
+        assertEquals("the repaired order must be able to reach every track", 8, reached.size)
     }
 
     @Test

@@ -1,9 +1,9 @@
 # 极简music (JiJianMusic) — 项目交接报告
 
-> 交接版本：**versionCode 1 / versionName "1.0.0"**
-> 报告生成：2026-10-19（v6.2.0 更新于 2026-10-19；**V1.0 重新编号于 2026-10-25**）
-> 代码规模：`app/src/main/java` 71 个 .kt / 12922 行；`app/src/test/java` 25 个 .kt / 2978 行 / **217 项测试 0 失败**
-> 产物：`build/apk/jijian-music-1.0.0-vc1-debug.apk`（23513794 B）
+> 交接版本：**versionCode 2 / versionName "1.0.1"**
+> 报告生成：2026-10-19（v6.2.0 更新于 2026-10-19；**V1.0 重新编号于 2026-10-25**；**V1.0.1 于 2026-10-28**）
+> 代码规模：`app/src/main/java` 72 个 .kt / 12939 行；`app/src/test/java` 25 个 .kt / 3085 行 / **222 项测试 0 失败**
+> 产物：`build/apk/jijian-music-1.0.1-vc2-debug.apk`（23399318 B）
 
 ---
 
@@ -16,16 +16,18 @@
 - **语言/UI**：Kotlin + Jetpack Compose（Material 3）
 - **视觉系统**：**v6.0.0 "Neon Vinyl"**——Aurora UI 极光背景 + 深色 OLED + Glassmorphism 玻璃，
   双主题（深浅）通用，见第四节「V6.0 视觉系统」
-- **v6.1.0 播放语义**：随机播放 = **shuffle cycle**（一条全序播完才重洗，换歌不丢序）；
-  上一首 = **播放历史回退**（`PlayHistory`）；静默停顿由 `StallWatchdog` 兜底；
-  均衡器曲线持久化在 `AppSettings.eq`。见第九节「v6.1 变更」
-- **v6.2.0 一致性修正**：媒体会话的「上一首」也走播放历史；队列槽位按 **media id**
-  解析（修 `playIndex(3)` 被报成 0）；`ShuffleOrder` 克隆体共享 generation，分叉不再
-  瞒过安装器；暂停中的播放器不再被判 stuck buffer。见第九节「v6.2.0 变更」
-- **V1.0 重新编号 + 两处播放修复**：版本号回到 `1.0.0` / `versionCode 1`，作为正式首发；
-  **周期推进移出查询**（`nextIndex` 变成纯查询，新增 `advanceCycle` 作为唯一推进入口），
-  修掉「随机播放要按几次下一首才真跳」；耳机/蓝牙「上一首」不再变成当前曲重播
-  （`setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)`）。见第九节「V1.0 变更」
+- **V1.0.1 播放语义（当前）**：随机播放 = **每次换歌抽一次签**（在除当前曲外的所有
+  槽位上均匀抽，结果缓存到下一首真正开始为止）；「上一首」用**同一规则**，额外避开
+  刚播完的那首，所以双向都是随机的、且连按两次不会在两首之间弹跳。
+  **没有 cycle、没有播放历史栈**——`PlayHistory.kt` 与 `advanceCycle` 都已删除。
+  静默停顿由 `StallWatchdog` 兜底；均衡器曲线持久化在 `AppSettings.eq`。
+  见第五、九节
+- **V1.0.1 耳机按键修复**：media3 的 `seekToPrevious()` 有两条路会变成「重播当前曲」——
+  位置超过 `getMaxSeekToPreviousPosition()`（默认 3s），或 `getPreviousIndex()` 返回
+  `-1`。V1.0 只关了前者；V1.0.1 让抽签**永不返回 -1**，把后者也堵掉。
+- **V1.0.1 两个 seam**：`player/ShuffleSink.kt`（装/卸 order）与
+  `player/QueueMirror.kt`（镜像 playlist 的五步收在一处），替代 `PlayerController`
+  里八处复制粘贴。见第九节「V1.0.1 变更」
 - **播放内核**：Media3 ExoPlayer 1.4.1 + `MediaSessionService`
 - **持久化**：Room 2.6.1（v4）+ DataStore Preferences
 - **构建**：Gradle 8.7 + AGP 8.5.2 + Kotlin 2.0.20，Groovy DSL
@@ -138,7 +140,8 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
 | `player/RandomShuffleOrder.kt` | 把上面的策略适配成 ExoPlayer 的 `ShuffleOrder` 接口 |
 | `player/EqualizerController.kt` | 均衡器（5 段 + BassBoost + Virtualizer + LoudnessEnhancer） |
 | `player/QueueLogic.kt` | 队列增删移的纯函数 |
-| `player/PlayHistory.kt`（v6.1） | 播放历史栈（容量 200），「上一首」回退的真实来源；`confirmBack()` + `expected` id **集合**匹配（v6.2 从单槽改成集合，因为 `prev()` 落地是异步的），避免「栈 + 回退标记」被漏复位吃掉整栈 |
+| `player/ShuffleSink.kt`（V1.0.1） | 装/卸 shuffle order 的 seam：`install(): Boolean` / `dropInstalled()`。生产实现桥到 `PlayerHolder` 的 ExoPlayer，测试实现是内存 sink |
+| `player/QueueMirror.kt`（V1.0.1） | 镜像 playlist 的唯一起点：`replace` / `ensure` / `insert` / `move` / `remove` / `clear` / `dropToSingleItem`，五步顺序固定（drop → flag → select → setMediaItems → resync）。取代 `playlistMode` 字段与八处复制粘贴 |
 | `player/QueueIndex.kt`（v6.2） | `queueIndexOf(mediaId, queue, playerIndex)`：先按 **mediaId** 查队列槽位，查不到回退播放器报的 index，再不行返 -1 让调用方忽略回调。修 `playIndex(3)` 在单曲模式被报成 0 |
 | `player/StallWatchdog.kt`（v6.1） | 纯 Kotlin 的静默停顿看门狗（无 Android 类型，假时钟可测）：8s 不动 → RETRY，再 8s → REBUFFER，缓冲态单独 20s |
 
@@ -214,31 +217,33 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
 
 ## 五、随机播放：一条踩了八轮的路径（务必先读）
 
-这是本项目历史最曲折的部分，从 v5.3 到 v6.1 迭代了九个版本。
-**当前语义（V6.1，`RandomShuffle.kt` 的 KDoc 是权威定义）**：
+这是本项目历史最曲折的部分，从 v5.3 到 v1.0.1 迭代了十一个版本。
+**当前语义（V1.0.1，`RandomShuffle.kt` 的 KDoc 是权威定义）**：
 
-- **洗牌周期（shuffle cycle）**：队列被 Fisher-Yates 洗成一条全序，`getNextIndex` /
-  `getPreviousIndex` / `getFirstIndex` / `getLastIndex` 全部从这条序上取，
-  四个问题的答案**必然自洽**。
-- **一条 cycle 播完才重洗**：cycle 内每首恰好一次。`onMediaItemTransition` **不再**
-  `invalidate()`（旧代码每次换歌丢掉整条序，是「随机听起来不随机」的根因）。
-- **周期交界处锚定当前曲**：cycle 走到底时 `RandomShuffle.cycleFrom(size, anchor)`
-  以刚播完的歌为第 0 位重洗，所以既不会「一轮最后一首 = 下一轮第一首」，也不漏歌。
-- **不是「独立均匀抽样」**：v5.3.1–v5.3.5 曾经是每次问都独立抽样，这正是
-  v5.3.6 修掉的 bug 来源（见下面第 4 条）。任何文档若还说「允许重复、没有序」，
-  那是过期描述。
-- **上一首 = 播放历史回退**：`prev()` 走 `PlayHistory`（容量 200），不是「再抽一次随机」，
-  也不是「cycle 的前一位」——后者是一首本轮还没播过的歌，听起来像往前跳。
-  历史为空时重播当前曲。
-- **周期起点问 prev 返回 `-1`**：ExoPlayer 把它读作「重播当前曲」。
-- **按钮与系统走同一条 cycle**：App 按钮调 `nextIndex`（不是 `redrawNext`），
-  通知栏/锁屏/蓝牙/自动续播走已安装的 `RandomShuffleOrder` → 同一个
-  `RandomShuffleState`。两条路径共用一个状态，不是各抽各的。
+- **每次换歌抽一次（draw）**：`nextIndex` 在「除当前曲以外的所有槽位」上均匀抽一个，
+  结果记在 `nextPick` 里，**在下一首歌真正开始之前反复问都给同一个答案**。
+  这条「记住」是为了不重蹈两个坑：v5.3.6 之前是每次查询独立抽样，media3 一次决策里
+  会问好几遍，答案互不相同 → 通知栏与按钮打架、播放头被来回拉（卡死）；
+  v6.1 的 cycle 又矫枉过正，顺序被定死。
+- **两个方向都是抽**：`previousIndex` 与 `nextIndex` 同规则，唯一区别是它额外避开
+  **刚播完的那首**（`lastTrack`），所以连按两次「上一首」不会在两首之间弹跳。
+  它**不是**「播放历史回退」，也不是「cycle 的前一位」。
+- **`PlayHistory` 已删除**（V1.0.1）。以前 `prev()` 弹栈，历史为空时返回 -1，
+  media3 把 -1 读成「没有上一首」→ `seekToCurrentItem(0)` = 当前曲从头重播，
+  这就是「耳机第一次按上一首会重放本曲」。现在抽签永不返回 -1，那条分支进不去。
+- **没有 cycle 了**：`cycleFrom` / `advanceCycle` / `cyclesDrawn` / `generation`
+  全部删除。`generation` 当初只为「发现序被重画」而存在，抽签语义下没有序可画。
+- **`firstIndex` / `lastIndex` 不是随机结果**：`firstIndex` 恒为 0、`lastIndex` 恒为
+  `size-1`。media3 在建 `MediaPeriodQueue` 和 `repeatMode == ALL` 回绕时问它们，
+  答案必须稳定（问两遍不同会让它重排缓冲）。「下一首」不走这两个函数。
+- **按钮与系统走同一份 state**：App 按钮调 `nextIndex` / `previousIndex`，
+  通知栏/锁屏/蓝牙走已安装的 `RandomShuffleOrder` → 同一个 `RandomShuffleState`。
 
-**决策理由**见 [docs/adr/0001](docs/adr/0001-shuffle-cycle-and-play-history.md)
-（为什么是 cycle 而不是纯随机 / 为什么 prev 走历史）。
+**决策理由**见 [docs/adr/0001](docs/adr/0001-shuffle-cycle-and-play-history.md)。
+注意：该 ADR 写于 V6.1，描述的是「一条 cycle 播完才重洗 + prev 走历史」那套已经被
+V1.0.1 推翻的语义。它保留下来是因为下面五条根因的推导过程仍有价值，**结论部分过期**。
 
-五条已修复的根因，每条都有回归测试：
+九条已修复的根因，每条都有回归测试：
 
 1. **memo 越界重放**（v5.3.4）— `forward`/`backward` 只按源位置建键、不记 size。
    队列变短后旧答案被重放，返回越界索引。而 ExoPlayer 把
@@ -266,7 +271,7 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
    应用侧表现就是**通知栏/锁屏/车机的「下一首」按了没反应**，而 App 内按钮（绕过
    ExoPlayer 直接改队列）却是好的——这个不对称是定位这条根因的关键线索。
    修法：整条队列洗成一条全序，四个问题共用它。
-   → `RandomShuffleOrderTest`（11 项）+ `ShuffleStallProbe`（8 项）
+   → `RandomShuffleOrderTest`（11 项）+ `ShuffleStallProbe`（9 项）
 
 5. **`MediaControllerImplBase.seekToNextMediaItem()` 的双动作**（v5.3.6）— 它先让
    session 侧的 ExoPlayer 按 `shuffleOrder` 前进，再从 controller 镜像的 `PlayerInfo`
@@ -282,11 +287,25 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
    `ShuffleStallProbe.oneCycleNeverRepeatsATrack`
 
 7. **上一首在随机模式下「往前跳」**（v6.0 及以前）— `prev()` 抽的是 cycle 上一位，
-   那是一首本轮还没播过的歌。修法：`PlayHistory` 记录真实播放顺序，`prev()` 弹栈。
-   用「弹栈后记 `expected` id」代替「历史 + 回退中布尔标记」，因为后者要在每条
-   换歌路径复位，漏一处就把栈吃掉。
-   → `ShuffleStallProbe.appPrevGoesBackToTheTrackActuallyHeard`、
-   `appPrevAtTheStartRestartsWithoutStalling`
+   那是一首本轮还没播过的歌，听起来像往前跳。v6.1 的修法是引入 `PlayHistory` 弹栈
+   （记 `expected` id 认领回退，因为「历史 + 回退中布尔标记」要在每条换歌路径复位，
+   漏一处就把栈吃掉）。**V1.0.1 把这条修法也否掉了**：用户要的是「上一首也随机」，
+   于是 `prev()` 改成与 `next()` 同规则的抽签，`PlayHistory` 整个文件删除。
+   → `RandomShuffleStateTest`（prev 避开刚播完的那首）、
+   `ShuffleStallProbe.twoTrackQueueStillAdvancesBothDirections`
+
+9. **耳机「上一首」重播当前曲**（V1.0 及以前，两层原因）— 第一层是 media3 的
+   `BasePlayer.seekToPrevious()`：位置超过 `getMaxSeekToPreviousPosition()`
+   （默认 3000ms）时走 `seekToCurrentItem(0)`，即从头重播。V1.0 用
+   `setMaxSeekToPreviousPositionMs(Long.MAX_VALUE)` 关掉。第二层更隐蔽：即使越过
+   阈值，`hasPreviousMediaItem()` 还要问 `ShuffleOrder.getPreviousIndex()`，
+   而旧的 `previousOf` 历史钩子在历史为空时返回 `-1`，media3 同样读成「没有上一首」
+   → 又回到 `seekToCurrentItem(0)`。这就是「第一次按必重播」的原因。
+   **V1.0.1 的修法不是给空历史特判，而是让抽签永不返回 -1**——队列大于 1 时
+   `previousIndex` 恒返回一个合法且不等于当前的下标，`else` 分支进不去。
+   阈值覆写保留作顺序模式的第二道防线（那里 index 0 真的没有上一首）。
+   → `RandomShuffleOrderTest`（prev 恒为合法范围内下标）、
+   实机 `KEYCODE_MEDIA_PREVIOUS` × 5 每次都换歌
 
 8. **切模式卡顿**（v6.0 及以前）— `installShuffleOrder()` 每次都装一份新 order；
    `ExoPlayerImpl.setShuffleOrder` 内部 `createMaskingTimeline()` 造新
@@ -295,7 +314,9 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
    跨 binder 放大成主线程停顿。修法：记住已装 order 的 `RandomShuffleState.version`
    与 playlist 长度，没变就 early return；整表重建前 `forgetInstalledOrder()`。
 
-**改这块之前请务必先读这七个测试文件**，它们编码了所有踩过的坑。
+**改这块之前请务必先读这几个测试文件**（`RandomShuffleTest`、
+`RandomShuffleStateTest`、`RandomShuffleOrderTest`、`RandomShuffleCloneTest`、
+`RandomShuffleStateStalenessTest`、`ShuffleStallProbe`），它们编码了所有踩过的坑。
 
 ---
 
@@ -414,6 +435,22 @@ python -X utf8 _x.py
 ---
 
 ## 九、已知问题与技术债（接手后建议优先处理）
+
+### V1.0.1 变更（两个方向都改成抽签 + 两个 seam）
+
+用户报的三条：「这一次的下一首随机，上一首不随机」「耳机切换依然第一次会重新播放这首歌」
+「随机播放下这一次的播放顺序是固定的，不是随机的」。三条指向同一件事：
+V1.0 的修法只补了一半。
+
+| 缺陷 | 根因 | 修法 | 回归 |
+|---|---|---|---|
+| 随机模式下「上一首」不随机 | `RandomShuffleState.previousIndex()` 走的是 cycle 前驱——那是**本轮还没播过**的一首，听起来像往前跳；`prev()` 另一条路径弹 `PlayHistory`，历史为空时返回 `-1` → 重播当前曲 | 两个方向都改为**抽签**：`previousIndex` 与 `nextIndex` 同规则（在除当前曲外的槽位上均匀抽），额外避开刚播完的 `lastTrack`，所以连按两次上一首不会在两首之间弹跳。`PlayHistory.kt` 整个删除，`RandomShuffleOrder` 的 `previousOf` 钩子一并删除 | `RandomShuffleStateTest`（18）、`RandomShuffleOrderTest`（11）、`ShuffleStallProbe`（9） |
+| 耳机「上一首」第一次必重播当前曲 | V1.0 只堵了 `getMaxSeekToPreviousPosition()` 那条（位置 > 3s）。还有第二条：`hasPreviousMediaItem()` 问 `ShuffleOrder.getPreviousIndex()`，旧的 `previousOf` 在空历史时返回 `-1`，media3 读成「没有上一首」→ `seekToCurrentItem(0)` | 不是给空历史特判，而是**让抽签永不返回 -1**（队列 > 1 时恒返回合法且不同于当前的下标），`else` 分支进不去。阈值覆写保留作顺序模式第二道防线 | `RandomShuffleOrderTest.previousAlwaysAnswersALegalSlot`、实机 `KEYCODE_MEDIA_PREVIOUS`×5 每次换歌 |
+| 随机顺序是固定的 | 就是 cycle 本身：一条全序播完才重洗，用户听到的是重复的同一串顺序 | 删除 cycle 全部机制（`cycleFrom` / `advanceCycle` / `cyclesDrawn` / `generation`），改为每次换歌抽一次并缓存到下一首开始 | `RandomShuffleTest`（6）、`ShuffleStallProbe.everyDrawFromTheSameTrackCanReachEveryOtherTrack` |
+| 八处复制粘贴的「镜像 playlist 五步」 | `tryMirrorPlaylist` / `ensureMirrorPlaylist` / `enqueue` / `playNext` / `moveInQueue` / `removeFromQueue` / `clearQueue` / `rebuildFrozenSource` 各自手写同一串步骤，v6.1 就因此在 `moveInQueue` 里漏了第 1 步（先移动再装序） | 新增 `player/ShuffleSink.kt`（install / drop 的 seam）与 `player/QueueMirror.kt`（五步按固定顺序收在一处）；`PlayerController.playlistMode` 字段删除，改问 `mirror.isMirrored` | `QueueMirrorTest`（17） |
+
+**同时清掉**：`PlayerController` 里 `shuffleState.advanceCycle` 的两个发散调用点、
+`resetShuffle()` 的两行 pass-through 语义模糊、`forgetInstalledOrder()` 在九处被手写调用。
 
 ### V1.0 变更（重新编号首发 + 两处播放修复）
 
@@ -544,26 +581,29 @@ python -X utf8 _x.py
 
 ## 十、测试
 
-**217 项 / 25 个测试类 / 0 失败**（V1.0 实测）。全部是 JVM 单元测试（`app/src/test/java/`），
+**222 项 / 25 个测试类 / 0 失败**（V1.0.1 实测）。全部是 JVM 单元测试（`app/src/test/java/`），
 **不需要设备**。
 
 > 历史：接手时 144 项 / 17 类；v5.3.6 起 161 项 / 19 类（`ShuffleStallProbe` 5 项）；
 > v6.0.0 起 169 项 / 20 类（新增 `NeonTokensTest` 8 项）；
 > v6.1.0 起 187 项 / 22 类，v6.1.1 起 196 项 / 23 类，v6.2.0 起 214 项 / 25 类（新增 `StallWatchdogTest` 7、`EqProfileTest` 7、`PlayHistoryTest` 9、`QueueIndexTest` 5、`SettingsRoundTripTest` 9，
 > `ShuffleStallProbe` 5→8，`RandomShuffleStateTest` 16→17）；
-> **V1.0 起 217 项 / 25 类**（`RandomShuffleStateTest` 17→20，新增「查询不重画周期」「重复推进无害」「末位回绕不返回当前曲」三项）。
+> **V1.0 起 217 项 / 25 类**（`RandomShuffleStateTest` 17→20）。
+> **V1.0.1 起 222 项 / 25 类**：`PlayHistoryTest`（9）随 `PlayHistory.kt` 一起删除，
+> 新增 `QueueMirrorTest`（17）；`RandomShuffleStateTest` 20→18、`RandomShuffleOrderTest` 14→11、
+> `ShuffleStallProbe` 8→9、`RandomShuffleTest` 5→6 —— 全部按抽签语义重写。
 
 | 测试类 | 项数 | 覆盖 |
 |---|---|---|
 | `EmbeddedLyricsTest` | 18 | ID3v2/FLAC/Ogg/MP4 内嵌歌词解析 |
 | `PlayStatsTest` | 17 | 日/周分桶、排行、时区（固定 `Asia/Shanghai`） |
-| `RandomShuffleStateTest` | 20 | **v6.1**：洗牌周期契约——一条 cycle 覆盖全队列、换歌不重洗（`cycles == 1`）、周期起点问 prev 返回 -1；**V1.0**：`nextIndex` 是纯查询，末位询问 20 次也不重画（`queryingAtTheCycleEndDoesNotRedrawIt`）、`advanceCycle` 重复调用只推进一次 |
+| `RandomShuffleStateTest` | 18 | **V1.0.1 抽签契约**：next 排除当前曲、prev 同样排除且额外避开刚播完的那首、一次抽签在下一首开始前反复问答案不变、`onTrackStarted` 清空缓存、2 首队列两个方向都能换 |
 | `LocalLibraryTest` | 15 | 分组、搜索、排序 |
+| `QueueMirrorTest` | 17 | **V1.0.1**：镜像 playlist 的五步按固定顺序执行、`move`/`remove` 在播放器改动**之后**才丢弃已装 order、`replace` 拒绝无法镜像的队列 |
 | `QueueLogicTest` | 12 | 队列增删移纯逻辑 |
-| `RandomShuffleOrderTest` | 14 | `ShuffleOrder` 契约（v6.1 周期语义）+ **v6.2** `previousOf` 历史钩子 |
-| `PlayHistoryTest` | 9 | **v6.1.1**：有界历史栈、连续重复抑制、回退落空仍记录这次转换 |
+| `RandomShuffleOrderTest` | 11 | **V1.0.1** `ShuffleOrder` 契约：prev 恒答一个合法且不等于当前的下标，克隆体继续从同一份 state 抽 |
 | `LrcParserTest` | 8 | LRC 时间戳解析 |
-| `ShuffleStallProbe` | 8 | **v6.1**：app 走 500 步 + 系统走 500 步都不卡、一条 cycle 不重复、prev 回到真正听过的歌 |
+| `ShuffleStallProbe` | 9 | **V1.0.1**：app 走 500 步 + 系统走 500 步都不卡、两条路径永远选同一首、从同一首出发的多次抽签能覆盖全部 N-1 个替代 |
 | `NeonTokensTest` | 8 | **v6.0.0**：极光峰值 4.5:1 红线、品牌渐变三色可辨、动效节律 |
 | `ThemePaletteTest` | 8 | 8 套配色的 light/dark scheme |
 | `RandomShuffleCloneTest` | 7 | 克隆协议 |
@@ -572,7 +612,7 @@ python -X utf8 _x.py
 | `OledTokensTest` | 6 | 设计 token 一致性 + 4.5:1 对比度 |
 | `RandomShuffleStateStalenessTest` | 6 | 队列缩容后 memo 不越界 |
 | `LocalLibraryMergeTest` | 6 | 本地库合并 |
-| `RandomShuffleTest` | 5 | 抽样分布均匀性（统计断言） |
+| `RandomShuffleTest` | 6 | **V1.0.1**：`pickOther` 恒落在范围内且永不返回被排除的槽位；600 seed 上的均匀性 |
 | `SafMusicScannerTest` | 5 | SAF 扫描 |
 | `SettingsTest` | 5 | 设置默认值与枚举取值 |
 | `SettingsRoundTripTest` | 9 | **v6.2**：写入侧与读取侧用同一批 `KEY_*` 往返——每个 EQ 字段 + 枚举回落 + 上次播放指针，堵住「均衡器不保存」那类默认值掩盖的缺陷 |
@@ -593,7 +633,7 @@ python -X utf8 _x.py
 `_probe_stall.ps1` 是「位置冻住」的长播探针，需要模拟器在线）：
 
 ```powershell
-& python _cnt.py     # files=25 tests=217 failures=0 errors=0
+& python _cnt.py     # files=25 tests=222 failures=0 errors=0
 ```
 
 ---
@@ -612,25 +652,29 @@ python -X utf8 _x.py
 **没有 `RandomShuffle` 的历史版本**。要对比历史只能解 zip。
 
 项目根**没有** `UPDATE_PLAN.md`（早期版本的控制台报告里提过这个文件名，实际从未入库）。
-版本历史的权威记录是 `README.md` 的版本章节：当前版本在最前面的 `v6.2.0` 一节，
-往下是时间线留档（早于 v6.2.0 的章节只用于追溯，不代表当前行为）。
+版本历史的权威记录是 `README.md` 的版本章节：当前版本在最前面的 `V1.0.1` 一节，
+往下是时间线留档（早于 V1.0.1 的章节只用于追溯，不代表当前行为）。
 
-v6.1 的设计文档在 `docs/`：`GLOSSARY.md`（队列/镜像队列/洗牌周期/播放历史/静默停顿）、
-`docs/adr/0001-shuffle-cycle-and-play-history.md`、`docs/adr/0002-detect-silent-stalls.md`、
-`docs/v6.1-refactor-plan.md`（施工单 + 验收记录）。
+领域词表是 `GLOSSARY.md`（队列 / 镜像 playlist / 抽签 Draw / Next / Previous / 循环 /
+静默停顿 / 偏好 / 均衡器曲线 / 效果状态）。
+
+`docs/` 下三份是 **v6.1 时期**的设计留档：`docs/adr/0001-shuffle-cycle-and-play-history.md`
+（ADR：为什么当时选 cycle，**结论已被 V1.0.1 推翻**）、
+`docs/adr/0002-detect-silent-stalls.md`（ADR：静默停顿检测，仍然有效）、
+`docs/v6.1-refactor-plan.md`（施工单 + 验收记录，历史）。
 
 ---
 
 ## 十二、接手检查清单
 
 - [ ] 确认 `C:\Program Files (x86)\Android\openjdk\jdk-21.0.8` 与 `D:\demo\android-sdk` 存在
-- [ ] 跑一次标准构建命令，确认 `BUILD SUCCESSFUL` + 217 测试 0 失败
+- [ ] 跑一次标准构建命令，确认 `BUILD SUCCESSFUL` + 222 测试 0 失败
 - [ ] 读 `FeatureFlags.kt`（理解在线/离线边界）
-- [ ] 读 `player/RandomShuffle.kt` 的 KDoc + 六个 `RandomShuffle*` 测试类 + `ShuffleStallProbe` + `StallWatchdogTest`
+- [ ] 读 `player/RandomShuffle.kt` 的 KDoc + `RandomShuffle*` 五个测试类 + `ShuffleStallProbe` + `QueueMirrorTest` + `StallWatchdogTest`
 - [ ] 读 `ui/theme/OledTokens.kt` 与 `ui/neon/NeonTokens.kt`（改 UI 前必读）
 - [ ] 读本报告第九节，决定先还哪笔技术债
-- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.0.0-vc1-debug.apk`
-      （`-d` 必需：`versionCode` 从 26 降到 1，系统默认按降级拒绝）
+- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.0.1-vc2-debug.apk`
+      （`-d` 必需：`versionCode` 相对 6.x 时代的 26 是降级，系统默认拒绝）
 
 ---
 
@@ -643,10 +687,10 @@ $env:JAVA_HOME="C:\Program Files (x86)\Android\openjdk\jdk-21.0.8"; $env:ANDROID
 .\gradlew.bat :app:assembleDebug :app:versionedApk :app:testDebugUnitTest --no-daemon --console=plain
 
 # 看 APK 版本
-D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.0.0-vc1-debug.apk | Select-String versionCode
+D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.0.1-vc2-debug.apk | Select-String versionCode
 
 # 验签
-D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.0.0-vc1-debug.apk
+D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.0.1-vc2-debug.apk
 
 # 重新生成搜索 bundle
 cd D:\demo\lx-builder; node build.mjs

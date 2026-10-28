@@ -6,23 +6,22 @@ import org.junit.Test
 import kotlin.random.Random
 
 /**
- * Regression tests for the two shuffle defects that made playback appear to
+ * Regression tests for the queue-resize defects that made playback appear to
  * freeze.
  *
- * 1. Size staleness. [RandomShuffleState] memoises its answers by source
- *    position only. [PlayerController.installShuffleOrder] hands the *same*
- *    state object to a brand new [RandomShuffleOrder] every time the queue
- *    length changes, so an answer memoised while the queue was long used to be
- *    replayed after the queue shrank. ExoPlayer treats a [androidx.media3.exoplayer.source.ShuffleOrder]
- *    result as a child index and never range-checks it, so an out-of-range
- *    answer corrupts the timeline instead of merely picking a wrong track.
+ * [RandomShuffleState] memoises one draw per direction. [PlayerController]
+ * hands the *same* state object to a brand new [RandomShuffleOrder] every time
+ * the queue length changes, so an answer memoised while the queue was long used
+ * to be replayed after the queue shrank. ExoPlayer treats a
+ * [androidx.media3.exoplayer.source.ShuffleOrder] result as a child index and
+ * never range-checks it, so an out-of-range answer corrupts the timeline
+ * instead of merely picking a wrong track.
  *
- * 2. Missing synchronisation. The state is written from ExoPlayer's playback
- *    thread (`MediaSourceList.setShuffleOrder` -> `cloneAndInsert` ->
- *    `invalidate`) and from the app's main thread (`redrawNext` on a button
- *    press). The memos are plain HashMaps; a `put` racing a resize can leave a
- *    bucket list cyclic and the next traversal on the main thread never
- *    terminates. That is an ANR with no crash and no log.
+ * V1.0.1: every entry point on the state is `@Synchronized` (it is written from
+ * ExoPlayer's playback thread via `MediaSourceList.setShuffleOrder` ->
+ * `cloneAndInsert` and from the app's main thread on a button press), and a
+ * memo whose index no longer fits the current length is discarded rather than
+ * replayed.
  */
 class RandomShuffleStateStalenessTest {
 

@@ -7,71 +7,80 @@ import org.junit.Test
 import kotlin.random.Random
 
 /**
- * V5.3.6: the random-playback order.
+ * V1.0.1: the random draw itself.
  *
- * The order is one arrangement of the queue (element `k` is the queue index that
- * plays k-th), produced by Fisher-Yates. Two properties are load-bearing:
+ * The order of the playlist is no longer shuffled up front - each decision asks
+ * [RandomShuffle.pickOther] for one index. Two properties are load-bearing:
  *
- * - every source index appears exactly once, so "next of anything" is always a
- *   different, always valid, always existing track - this is what stops the
- *   player from reading a "no next item" answer and stopping for good;
- * - the draw is uniform over the arrangements, so no position in the playlist
- *   is favoured and a track can legitimately come back after a pass.
+ * - the answer is always a real index in `0 until size`, never -1 while the
+ *   queue has two or more tracks, because media3 reads -1 as "no next item" and
+ *   stops playback for good (the v5.3.1 stall);
+ * - the draw is uniform and never returns an excluded index, so "next" changes
+ *   the track instead of replaying it.
  */
 class RandomShuffleTest {
 
     @Test
-    fun shuffledOrderIsAnArrangementOfEveryIndex() {
+    fun pickOtherAlwaysLandsInRange() {
         for (size in 1..24) {
             for (seed in 0 until 20) {
-                val order = RandomShuffle.shuffledOrder(size, Random(seed))
-                assertEquals("size mismatch", size, order.size)
-                assertEquals(
-                    "order $order is not an arrangement of 0 until $size",
-                    (0 until size).toSet(),
-                    order.toSet(),
-                )
+                val pick = RandomShuffle.pickOther(size, intArrayOf(), Random(seed))
+                assertTrue("size=$size seed=$seed gave $pick", pick in 0 until size)
             }
         }
     }
 
     @Test
-    fun shuffledOrderLeavesNothingInPlaceByChance() {
-        // A shuffle that happens to be the identity is not a bug, but one that
-        // is *always* the identity is. Across many seeds the order must move.
-        var identity = 0
-        for (seed in 0 until 500) {
-            if (RandomShuffle.shuffledOrder(8, Random(seed)).toList() == (0..7).toList()) identity++
+    fun pickOtherNeverReturnsAnExcludedIndex() {
+        for (seed in 0 until 200) {
+            val pick = RandomShuffle.pickOther(6, intArrayOf(2), Random(seed))
+            assertNotEquals("excluded index came back with seed $seed", 2, pick)
         }
-        assertTrue("shuffledOrder stayed the identity $identity times out of 500", identity < 500 / 24)
-    }
-
-    @Test
-    fun everyPositionOfAQueueCanEndUpAnywhere() {
-        // Uniformity: the queue index 0 must show up in every slot of the
-        // shuffled order across seeds, otherwise the "random" order is not.
-        val size = 6
-        val slots = IntArray(size)
-        for (seed in 0 until 600) slots[RandomShuffle.shuffledOrder(size, Random(seed)).indexOf(0)]++
-        val expected = 100
-        for (slot in 0 until size) {
-            assertTrue("slot $slot off the uniform band: $slots", slots[slot] in (expected - 40)..(expected + 40))
+        for (seed in 0 until 200) {
+            val pick = RandomShuffle.pickOther(6, intArrayOf(1, 4), Random(seed))
+            assertTrue("excluded index came back: $pick (seed $seed)", pick !in intArrayOf(1, 4))
         }
     }
 
     @Test
-    fun shuffledOrderHandlesDegenerateSizes() {
-        assertEquals(0, RandomShuffle.shuffledOrder(0, Random(1)).size)
-        assertEquals(0, RandomShuffle.shuffledOrder(-3, Random(1)).size)
-        assertEquals(listOf(0), RandomShuffle.shuffledOrder(1, Random(1)).toList())
+    fun pickOtherReachesEveryAllowedIndex() {
+        // Uniformity is the whole point of the version: a draw that only ever
+        // lands on two of the four candidates is not random playback.
+        val size = 5
+        val hits = IntArray(size)
+        for (seed in 0 until 1_000) hits[RandomShuffle.pickOther(size, intArrayOf(3), Random(seed))]++
+        val expected = 250
+        for (index in 0 until size) {
+            if (index == 3) {
+                assertEquals("the excluded index must never be drawn", 0, hits[index])
+            } else {
+                assertTrue("index $index off the uniform band: ${hits.toList()}", hits[index] in (expected - 70)..(expected + 70))
+            }
+        }
     }
 
     @Test
-    fun aTwoTrackQueueStillHasATwoWayOrder() {
-        for (seed in 0 until 50) {
-            val order = RandomShuffle.shuffledOrder(2, Random(seed))
-            assertEquals(2, order.size)
-            assertNotEquals(order[0], order[1])
+    fun anImpossibleExclusionStillReturnsAnIndexInsteadOfLooping() {
+        // size == exclude.size: every candidate is banned. Looping until a free
+        // one appears would hang the playback thread, so the draw must degrade
+        // to "one of them" rather than spin.
+        val pick = RandomShuffle.pickOther(1, intArrayOf(0), Random(3))
+        assertTrue("a fully excluded draw must still answer", pick == 0)
+        val two = RandomShuffle.pickOther(2, intArrayOf(0, 1), Random(9))
+        assertTrue("a fully excluded draw must still answer", two in 0 until 2)
+    }
+
+    @Test
+    fun degenerateSizesAnswerMinusOne() {
+        assertEquals(-1, RandomShuffle.pickOther(0, intArrayOf(), Random(1)))
+        assertEquals(-1, RandomShuffle.pickOther(-3, intArrayOf(), Random(1)))
+    }
+
+    @Test
+    fun aTwoTrackQueueAlwaysDrawsTheOtherTrack() {
+        for (seed in 0 until 100) {
+            assertEquals("with two tracks the draw is forced", 1, RandomShuffle.pickOther(2, intArrayOf(0), Random(seed)))
+            assertEquals(0, RandomShuffle.pickOther(2, intArrayOf(1), Random(seed)))
         }
     }
 }
