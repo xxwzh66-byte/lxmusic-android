@@ -110,4 +110,19 @@ class SettingsRoundTripTest {
         assertEquals("ONE", s.repeatMode)
         assertTrue(s.shuffle)
     }
+
+    @Test
+    fun theUpdateTokenSurvivesAWriteAndRead() {
+        // V1.0.2: 键名写错就是「填了令牌却永远匿名请求」，所以走真实写入侧。
+        val prefs = emptyPreferences().toMutablePreferences()
+        SettingsStore.writeUpdateToken(prefs, "  ghp_abc123  ")
+        assertEquals("ghp_abc123", SettingsStore.readSettings(prefs).updateToken)
+    }
+
+    @Test
+    fun aBlankUpdateTokenIsTheSameAsNone() {
+        val prefs = emptyPreferences().toMutablePreferences()
+        SettingsStore.writeUpdateToken(prefs, "   ")
+        assertEquals("", SettingsStore.readSettings(prefs).updateToken)
+    }
 }

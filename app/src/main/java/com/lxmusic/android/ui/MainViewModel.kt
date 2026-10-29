@@ -27,6 +27,8 @@ import com.lxmusic.android.local.LocalFileDeleter
 import com.lxmusic.android.local.LocalTrackMapper
 import com.lxmusic.android.local.SafMusicScanner
 import com.lxmusic.android.local.MusicGroup
+import com.lxmusic.android.net.UpdateChecker
+import com.lxmusic.android.net.UpdateInfo
 import com.lxmusic.android.player.EqPreset
 import com.lxmusic.android.player.EqualizerState
 import com.lxmusic.android.player.PlayerController
@@ -101,6 +103,23 @@ data class StatsUiState(
     val error: String? = null,
 )
 
+/** V1.0.2: 「检查更新」的四种结果。 */
+enum class UpdateStatus { IDLE, CHECKING, UP_TO_DATE, AVAILABLE, FAILED }
+
+/**
+ * V1.0.2: 设置页「检查更新」的一次结果。
+ *
+ * [checkSeq] 每次检查完成后递增，界面用它触发「更新内容公告」对话框——
+ * 用序号而不是状态值，是因为连续两次检查都得到 AVAILABLE 也应当各弹一次。
+ */
+data class UpdateCheckState(
+    val status: UpdateStatus = UpdateStatus.IDLE,
+    val currentVersion: String = "",
+    val latest: UpdateInfo? = null,
+    val message: String? = null,
+    val checkSeq: Int = 0,
+)
+
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val sourceManager = LxApp.instance.sourceManager
@@ -146,6 +165,55 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val settings: StateFlow<AppSettings> = settingsStore.state
 
     val versionName: String get() = BuildConfig.VERSION_NAME
+
+    // ---------------- check for updates (V1.0.2) ----------------
+
+    private val _update = MutableStateFlow(UpdateCheckState(currentVersion = BuildConfig.VERSION_NAME))
+    val updateCheck: StateFlow<UpdateCheckState> = _update.asStateFlow()
+
+    private var updateSeq = 0
+
+    /**
+     * V1.0.2: 设置页「检查更新」。
+     *
+     * 拉 GitHub 上的 `releases/latest`，把 tag 与本机 [versionName] 比较。
+     * 仓库是私有的，匿名请求会 404 —— 所以带「访问令牌」设置项，留空就匿名试。
+     * 网络在 IO 线程，结果落到 [updateCheck]，由界面弹「更新内容公告」对话框。
+     */
+    fun checkForUpdates() {
+        if (_update.value.status == UpdateStatus.CHECKING) return
+        val current = BuildConfig.VERSION_NAME
+        _update.value = UpdateCheckState(status = UpdateStatus.CHECKING, currentVersion = current)
+        viewModelScope.launch {
+            val token = settingsStore.state.value.updateToken
+            val result = withContext(Dispatchers.IO) {
+                runCatching { UpdateChecker().fetchLatest(token).getOrThrow() }
+            }
+            updateSeq += 1
+            _update.value = result.fold(
+                onSuccess = { info ->
+                    if (UpdateChecker.isNewer(info.tagName, current)) {
+                        UpdateCheckState(UpdateStatus.AVAILABLE, current, info, checkSeq = updateSeq)
+                    } else {
+                        UpdateCheckState(UpdateStatus.UP_TO_DATE, current, info, checkSeq = updateSeq)
+                    }
+                },
+                onFailure = { e ->
+                    UpdateCheckState(
+                        status = UpdateStatus.FAILED,
+                        currentVersion = current,
+                        message = e.message ?: "检查更新失败",
+                        checkSeq = updateSeq,
+                    )
+                },
+            )
+        }
+    }
+
+    /** V1.0.2: 持久化 GitHub 访问令牌（见 SettingsStore 的读写键名说明）。 */
+    fun setUpdateToken(token: String) {
+        settingsStore.setUpdateToken(token)
+    }
 
     /**
      * V5.3-2: the track the user listened to last, resolved against the local

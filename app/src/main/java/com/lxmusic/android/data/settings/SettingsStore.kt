@@ -79,6 +79,9 @@ data class AppSettings(
      * 每次用户改动再回写。
      */
     val eq: EqProfile = EqProfile.FLAT,
+
+    /** V1.0.2: GitHub 访问令牌。仓库为私有，匿名拉不到 releases；留空则匿名请求。 */
+    val updateToken: String = "",
 )
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -154,6 +157,9 @@ class SettingsStore private constructor(context: Context) {
     /** V6.1: persist the equalizer curve so it survives an app restart. */
     fun setEq(profile: EqProfile) = edit { writeEq(it, profile) }
 
+    /** V1.0.2: GitHub 访问令牌（私有仓的 releases 要鉴权才能拉到）。 */
+    fun setUpdateToken(token: String) = edit { writeUpdateToken(it, token) }
+
     fun addScanFolder(uri: String) = edit { prefs ->
         prefs[KEY_SCAN_FOLDERS] = (prefs[KEY_SCAN_FOLDERS] ?: emptySet()) + uri
     }
@@ -212,6 +218,14 @@ class SettingsStore private constructor(context: Context) {
             prefs[KEY_EQ_LOUDNESS] = profile.loudnessMb
         }
 
+        /**
+         * V1.0.2: 访问令牌的写入侧，与 [writeEq] 同一个理由抽出来——
+         * 读写两侧键名拼错不报错，只是永远读回默认值。
+         */
+        internal fun writeUpdateToken(prefs: MutablePreferences, token: String) {
+            prefs[KEY_UPDATE_TOKEN] = token.trim()
+        }
+
         private fun Preferences.toSettings(): AppSettings = AppSettings(
             themeMode = runCatching { ThemeMode.valueOf(this[KEY_THEME_MODE] ?: ThemeMode.SYSTEM.name) }
                 .getOrDefault(ThemeMode.SYSTEM),
@@ -249,6 +263,7 @@ class SettingsStore private constructor(context: Context) {
                 virtualizer = this[KEY_EQ_VIRTUALIZER] ?: 0,
                 loudnessMb = this[KEY_EQ_LOUDNESS] ?: 0,
             ),
+            updateToken = this[KEY_UPDATE_TOKEN] ?: "",
         )
 
         internal val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
@@ -277,5 +292,6 @@ class SettingsStore private constructor(context: Context) {
         internal val KEY_EQ_BASS = intPreferencesKey("eq_bass")
         internal val KEY_EQ_VIRTUALIZER = intPreferencesKey("eq_virtualizer")
         internal val KEY_EQ_LOUDNESS = intPreferencesKey("eq_loudness")
+        internal val KEY_UPDATE_TOKEN = stringPreferencesKey("update_token")
         }
 }

@@ -14,8 +14,12 @@ plugins {
 // V1.0.1: 随机播放改成「每次决策重抽一次，上下首都抽」（用户要求），耳机/蓝牙
 // 按上一首第一次会重播当前曲的问题随之修掉——根因是空历史让 order 回 -1，而
 // media3 把 -1 读成「没有上一首」并 seekToCurrentItem(0)。
-ext.appVersionCode = 2
-ext.appVersionName = "1.0.1"
+//
+// V1.0.2: 设置页加「检查更新」——拉 GitHub releases/latest 与本机版本比对，
+// 弹「更新内容公告」；仓库是私有的，所以同时加「访问令牌」设置项（留空则匿名
+// 请求，拿不到就明说原因）。
+ext.appVersionCode = 3
+ext.appVersionName = "1.0.2"
 
 android {
     namespace = "com.lxmusic.android"

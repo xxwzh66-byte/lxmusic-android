@@ -1,6 +1,6 @@
 # 极简music (JiJianMusic) for Android
 
-`applicationId = com.lxmusic.android` · 当前版本 **1.0.1** (`versionCode = 2`)
+`applicationId = com.lxmusic.android` · 当前版本 **1.0.2** (`versionCode = 3`)
 
 一个从 [lyswhut/lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) 的
 音源架构出发、逐步转型为**纯本地极简音乐播放器**的 Android 应用。
@@ -164,15 +164,17 @@ app/src/main/java/com/lxmusic/android/
 │   ├── LyricLoader.kt           # .lrc sibling + embedded lookup
 │   ├── LyricEncoding.kt         # UTF-8 / GBK / Latin-1 detection
 │   └── EmbeddedLyrics.kt        # ID3 / FLAC / Ogg / MP4 tag reader
-├── net/HttpBridge.kt            # OkHttp wrapper
+├── net/
+│   ├── HttpBridge.kt            # OkHttp wrapper
+│   └── UpdateChecker.kt         # V1.0.2: GitHub Releases latest -> UpdateInfo
 ├── player/
 │   ├── PlaybackService.kt       # MediaSessionService + ExoPlayer
 │   ├── PlayerController.kt      # URL resolution + playback state
 │   ├── PlayerHolder.kt          # the ExoPlayer instance (audioSessionId, ShuffleOrder)
 │   ├── RandomShuffle.kt         # V1.0.1: per-draw shuffle policy (authoritative KDoc)
 │   ├── RandomShuffleOrder.kt    # media3 ShuffleOrder adapter
-│   ├── ShuffleSink.kt           # V1.1: install/drop seam for the ShuffleOrder
-│   ├── QueueMirror.kt           # V1.1: the one place that mirrors the Queue
+│   ├── ShuffleSink.kt           # V1.0.1: install/drop seam for the ShuffleOrder
+│   ├── QueueMirror.kt           # V1.0.1: the one place that mirrors the Queue
 │   ├── QueueIndex.kt            # media id -> queue slot resolution
 │   ├── StallWatchdog.kt         # silent-stall detection (pure Kotlin)
 │   ├── QueueLogic.kt            # queue index bookkeeping
@@ -306,7 +308,7 @@ jurisdiction.
 ./gradlew :app:testDebugUnitTest
 ```
 
-222 unit tests across 25 classes, all green (run `./gradlew :app:testDebugUnitTest`):
+235 unit tests across 26 classes, all green (run `./gradlew :app:testDebugUnitTest`):
 
 | Test class | Cases | Covers |
 |---|---:|---|
@@ -327,7 +329,8 @@ jurisdiction.
 | `local/LocalLibraryMergeTest` | 6 | cache merge / prune semantics |
 | `player/RandomShuffleStateStalenessTest` | 6 | memo never goes out of range after the queue shrinks |
 | `ui/theme/OledTokensTest` | 6 | OLED token contrast ratios |
-| `data/SettingsRoundTripTest` | 9 | every preference key is written and read back through the *same* key constant — the "equalizer does not survive a restart" class of bug cannot hide behind a default-only assertion |
+| `data/SettingsRoundTripTest` | 11 | every preference key is written and read back through the *same* key constant — the "equalizer does not survive a restart" class of bug cannot hide behind a default-only assertion; the V1.0.2 update token is checked the same way |
+| `net/UpdateCheckerTest` | 11 | **V1.0.2**: release-tag version comparison (leading `v`, numeric segments, prerelease suffix ordering) and GitHub release JSON parsing (first `.apk` asset, title fallback, graceful degradation on missing fields) — no network in unit tests |
 | `data/SettingsTest` | 5 | settings defaults (incl. flat EQ profile) / enum values |
 | `local/SafMusicScannerTest` | 5 | audio extension / mime detection |
 | `player/QueueIndexTest` | 5 | a queue slot is only real if the *id* at that slot is the track playing — the online-queue `playIndex(3)` → reported-as-0 defect |
@@ -343,6 +346,50 @@ explains the root causes behind them.
 `NeonTokensTest` is the same idea for the visual layer: it recomputes WCAG
 contrast over the *brightest possible* aurora composite on every palette, so a
 future "make it pop more" tweak cannot silently drop body text below AA.
+
+---
+
+## V1.0.2 — Check for updates from the settings page (`versionCode = 3`)
+
+The app could tell you its own version number, but not whether a newer build
+existed. The settings page now asks GitHub for the latest release and shows its
+release notes in place.
+
+### What was added
+
+- `net/UpdateChecker.kt` — one HTTP call to
+  `https://api.github.com/repos/<repo>/releases/latest` through the existing
+  `HttpBridge`. It parses `tag_name`, `name`, `body`, `html_url` and the first
+  `.apk` asset into an `UpdateInfo`. Version comparison strips a leading `v`,
+  compares numeric segments as numbers (so `1.0.10` beats `1.0.9`), and treats a
+  release with no suffix as newer than a prerelease carrying the same number.
+- `SettingsStore` gains one key, `update_token`, together with its read/write
+  pair (`writeUpdateToken` / `toSettings`) and tests that walk both sides — the
+  same treatment the equalizer profile got after a "does not survive a restart"
+  bug turned out to be a mistyped key name that compiled fine and silently fell
+  back to the default forever.
+- `MainViewModel` owns a small `UpdateCheckState` flow
+  (`IDLE / CHECKING / UP_TO_DATE / AVAILABLE / FAILED`) and a `checkForUpdates()`
+  that runs the fetch off the main thread.
+- The settings page has a **更新** section: a "检查更新" row and an optional
+  **访问令牌** field. The result opens a dialog showing the current version, the
+  latest version, the APK size, and the full release notes.
+
+### Why there is a token field
+
+The GitHub repository is private. An anonymous `releases/latest` request on a
+private repo answers `404`, which is indistinguishable from "this repo has no
+releases", so the checker reports 404 as "the update source is unreachable, or
+the repo is private" and offers the token field instead of a dead end. With a
+`repo`-scoped personal access token the same request succeeds. A public mirror
+needs no token.
+
+### Verification
+
+`build/apk/jijian-music-1.0.2-vc3-debug.apk` (23,432,086 B), `versionCode = 3`,
+`versionName = 1.0.2`, confirmed with `aapt2 dump badging`. 235 unit tests across
+26 classes, 0 failures — 13 of them new (`UpdateCheckerTest`, plus two token
+round-trip cases in `SettingsRoundTripTest`).
 
 ---
 

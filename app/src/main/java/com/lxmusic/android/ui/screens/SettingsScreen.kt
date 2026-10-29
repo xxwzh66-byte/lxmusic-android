@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lxmusic.android.data.settings.ThemeMode
 import com.lxmusic.android.ui.MainViewModel
+import com.lxmusic.android.ui.UpdateCheckState
+import com.lxmusic.android.ui.UpdateStatus
 import com.lxmusic.android.ui.neon.NeonHairline
 import com.lxmusic.android.ui.neon.NeonScreen
 import com.lxmusic.android.ui.neon.NeonTokens
@@ -51,6 +55,15 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val s by viewModel.settings.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     var showClearDialog by remember { mutableStateOf(false) }
+
+    // ---------------- update (V1.0.2) ----------------
+    val up by viewModel.updateCheck.collectAsState()
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    // 每次检查完成都弹一次「更新内容公告」；用 checkSeq 而不是 status，
+    // 因为连续两次都查到 AVAILABLE 也应各弹一次。
+    androidx.compose.runtime.LaunchedEffect(up.checkSeq) {
+        if (up.checkSeq > 0 && up.status != UpdateStatus.CHECKING) showUpdateDialog = true
+    }
 
     NeonScreen(
         title = "设置",
@@ -162,6 +175,21 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
             item { SwitchRow("优先读取同目录 .lrc", null, s.preferLrcFile, viewModel::setPreferLrcFile) }
 
+            // ---------------- update (V1.0.2) ----------------
+            item { SectionHeader("更新") }
+
+            item {
+                InfoRow(
+                    title = "检查更新",
+                    subtitle = updateSubtitle(up, viewModel.versionName),
+                    onClick = viewModel::checkForUpdates,
+                )
+            }
+
+            item {
+                TokenRow(token = s.updateToken, onTokenChange = viewModel::setUpdateToken)
+            }
+
             item {
                 InfoRow(
                     title = "版本",
@@ -178,7 +206,6 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 )
             }
 
-            // V5-1/V5-3: 更新公告与关于分组已删除
             item {
                 InfoRow(
                     title = "清空数据",
@@ -201,6 +228,108 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消") } },
         )
     }
+
+    if (showUpdateDialog) {
+        UpdateDialog(state = up, onDismiss = { showUpdateDialog = false })
+    }
+}
+
+/** V1.0.2: 「检查更新」一行的副标题，随状态换文案。 */
+private fun updateSubtitle(state: UpdateCheckState, current: String): String = when (state.status) {
+    UpdateStatus.IDLE -> "拉取 GitHub 上的最新版本"
+    UpdateStatus.CHECKING -> "正在检查…"
+    UpdateStatus.UP_TO_DATE -> "已是最新版本（$current）"
+    UpdateStatus.AVAILABLE -> "有新版本：${state.latest?.tagName ?: "?"}，点按看更新内容"
+    UpdateStatus.FAILED -> state.message ?: "检查失败，点按重试"
+}
+
+/** V1.0.2: GitHub 访问令牌。仓库为私有，匿名请求拿不到 releases。 */
+@Composable
+private fun TokenRow(token: String, onTokenChange: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        Text("访问令牌", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "仓库为私有时才需要；留空则匿名请求",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        androidx.compose.material3.OutlinedTextField(
+            value = token,
+            onValueChange = onTokenChange,
+            singleLine = true,
+            placeholder = { Text("ghp_…（可选）") },
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * V1.0.2: 「更新内容公告」对话框。
+ *
+ * 成功时把 release 的标题与正文（就是 GitHub 上的 release notes）滚出来，
+ * 外加本机/最新版本与 APK 大小；有 release 页面就给「前往下载」。
+ */
+@Composable
+private fun UpdateDialog(state: UpdateCheckState, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val info = state.latest
+    val hasLink = state.status == UpdateStatus.AVAILABLE && !info?.url.isNullOrBlank()
+    val title = when (state.status) {
+        UpdateStatus.AVAILABLE -> "发现新版本 ${info?.tagName ?: ""}"
+        UpdateStatus.UP_TO_DATE -> "已是最新版本"
+        else -> "检查更新"
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth()
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+            ) {
+                if (state.status == UpdateStatus.FAILED) {
+                    Text(state.message ?: "检查更新失败")
+                    return@Column
+                }
+                Text("本机版本 ${state.currentVersion}")
+                if (info != null) {
+                    Text("最新版本 ${info.tagName}")
+                    if (info.apkName != null && info.apkSize > 0) {
+                        Text("安装包 ${info.apkName} · ${"%.1f".format(info.apkSize / 1_000_000.0)} MB")
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    if (info.notes.isNotBlank()) {
+                        Text("更新内容", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(4.dp))
+                        Text(info.notes, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Text("（这个版本没有写更新内容）", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (hasLink) {
+                TextButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(info!!.url),
+                            ),
+                        )
+                    }.onFailure { toast(context, "无法打开下载页面") }
+                }) { Text("前往下载") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("知道了") }
+            }
+        },
+        dismissButton = {
+            if (hasLink) TextButton(onClick = onDismiss) { Text("关闭") }
+        },
+    )
 }
 
 @Composable
