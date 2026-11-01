@@ -35,6 +35,12 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Restore the release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/jijian.keystore
+          echo "JIJIAN_KEYSTORE=/tmp/jijian.keystore" >> "$GITHUB_ENV"
       - name: Build versioned APK
         run: ./gradlew :app:assembleDebug :app:versionedApk --no-daemon --console=plain
       - name: Read version from build.gradle
