@@ -29,11 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # A workflow-level `env:` referencing secrets made GitHub reject the whole
-    # workflow at parse time (startup_failure on every run). Job-level env with
-    # secrets is the supported form, so the keystore secret lives here.
+    # Keystore secret is consumed at RUN time via $GITHUB_ENV (a workflow- or
+    # job-level `env:` that references a secret made GitHub reject the whole
+    # workflow at parse time - startup_failure on every run, both scopes).
     env:
-      KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
       JIJIAN_KEYSTORE: /tmp/jijian.keystore
     steps:
       - uses: actions/checkout@v4
@@ -43,7 +42,9 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Restore the release keystore
-        run: echo "$KEYSTORE_B64" | base64 -d > /tmp/jijian.keystore
+        run: |
+          echo "KEYSTORE_B64=${{ secrets.JIJIAN_KEYSTORE_B64 }}" >> "$GITHUB_ENV"
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/jijian.keystore
       - name: Build versioned APK
         run: ./gradlew :app:assembleDebug :app:versionedApk --no-daemon --console=plain
       - name: Read version from build.gradle
