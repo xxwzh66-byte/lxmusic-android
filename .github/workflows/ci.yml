@@ -26,7 +26,9 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-latest
-    environment: release
+    # NOTE: no `environment:` here. The keystore travels as a repo-level
+    # secret, and referencing a nonexistent environment makes GitHub reject
+    # the whole workflow at startup (jobs stay empty; rerun never helps).
     permissions:
       contents: write
     steps:
