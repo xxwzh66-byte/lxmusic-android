@@ -6,8 +6,6 @@ on:
     tags: ['v*']
   pull_request:
 
-env:
-  KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
 
 jobs:
   test:
