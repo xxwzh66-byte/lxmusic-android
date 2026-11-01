@@ -26,6 +26,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
@@ -35,8 +36,17 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build versioned APK
-        run: ./gradlew :app:assembleDebug :app:versionedApk --no-daemon --console=plain
+      # V1.1.1: the release keystore travels as a base64 secret so every
+      # published APK shares one signing certificate. The file is written
+      # outside the work tree and cleaned up so it never lands in an artifact.
+      - name: Restore the release keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/jijian.keystore
+          echo "JIJIAN_KEYSTORE=/tmp/jijian.keystore" >> "$GITHUB_ENV"
+      - name: Build the signed APK
+        run: ./gradlew :app:assembleRelease :app:versionedApk --no-daemon --console=plain
       - name: Read version from build.gradle
         id: ver
         run: |
@@ -47,5 +57,5 @@ jobs:
       - name: Upload APK to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/apk/jijian-music-${{ steps.ver.outputs.name }}-vc${{ steps.ver.outputs.code }}-debug.apk
+          files: build/apk/jijian-music-${{ steps.ver.outputs.name }}-vc${{ steps.ver.outputs.code }}.apk
           generate_release_notes: true

@@ -26,8 +26,14 @@ plugins {
 // V1.0.3: 启动静默检查更新（每 24h 一次，节流时间戳持久化），发现新版本在首页
 // 标签栏上方挂公告条；同时清理死代码（allowShowUpdateAlert、过时设计文档归档），
 // 并新增 GitHub Actions：push 自动跑测试、打 v* tag 自动构建并发 Release。
-ext.appVersionCode = 5
-ext.appVersionName = "1.1.0"
+// V1.1.1: 签名统一。此前所有 APK 都用「构建机的 debug 证书」签名，本机与
+// GitHub Actions 的证书不同，release 包无法覆盖升级本机安装（Android 报签名
+// 冲突，只能先卸载）。现在 release 构建固定用 signing/jijian.keystore，CI 从
+// secret 读同一份；本地无该文件时回落 debug 证书（仅供开发侧载）。
+//
+// 注意：升级到 1.1.1 需要先卸载旧版（证书变了，这是最后一次）。
+ext.appVersionCode = 6
+ext.appVersionName = "1.1.1"
 
 android {
     namespace = "com.lxmusic.android"
@@ -42,10 +48,39 @@ android {
         vectorDrawables { useSupportLibrary true }
     }
 
+    signingConfigs {
+        create("release") {
+            // V1.1.1: one stable identity for every distributed APK.
+            //
+            // A debug-signed build changes certificate whenever the machine (or
+            // the CI runner) that built it changes, and Android refuses to
+            // update an installed app whose signature differs. CI provides the
+            // real keystore through secrets; a local build without the env vars
+            // falls back to the debug key so developers can still sideload.
+            def ksPath = System.getenv("JIJIAN_KEYSTORE") ?: "signing/jijian.keystore"
+            def ksFile = rootProject.file(ksPath)
+            if (ksFile.exists()) {
+                storeFile = ksFile
+                storePassword = System.getenv("JIJIAN_KEYSTORE_PASSWORD") ?: "jijian2026"
+                keyAlias = System.getenv("JIJIAN_KEY_ALIAS") ?: "jijian"
+                keyPassword = System.getenv("JIJIAN_KEY_PASSWORD") ?: "jijian2026"
+            } else {
+                // No release keystore here: sign with the debug key so local
+                // installs still work; CI always has the real one.
+                storeFile = file(System.getenv("JIJIAN_DEBUG_KEYSTORE")
+                    ?: "${System.getProperty("user.home")}/.android/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             applicationIdSuffix ".debug"
@@ -66,11 +101,22 @@ android {
 }
 
 /**
- * QQ (and most IM file transfers) dedupe by file name + size, so shipping every
- * build as a plain `app-debug.apk` made the new package look like the copy the
- * chat already had. This task drops a uniquely named APK next to it.
+ * The distributable APK, uniquely named (QQ and most IM file transfers dedupe
+ * by file name + size, so shipping every build as a plain app-debug.apk made
+ * the new package look like a copy the chat already had).
+ *
+ * V1.1.1: renamed per build type - assembleRelease produces the real
+ * `jijian-music-<v>-vc<c>.apk` (stable signing key), assembleDebug keeps the
+ * `-debug` suffix. CI uploads the release one.
  */
 tasks.register("versionedApk", Copy) {
+    dependsOn("assembleRelease")
+    from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
+    into(rootProject.layout.buildDirectory.dir("apk"))
+    rename { "jijian-music-${project.ext.appVersionName}-vc${project.ext.appVersionCode}.apk" }
+}
+
+tasks.register("versionedDebugApk", Copy) {
     dependsOn("assembleDebug")
     from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
     into(rootProject.layout.buildDirectory.dir("apk"))

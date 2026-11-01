@@ -1,9 +1,9 @@
 # 极简music (JiJianMusic) — 项目交接报告
 
-> 交接版本：**versionCode 5 / versionName "1.1.0"**
-> 报告版本：**V1.1.0**（按代码实况更新；V1.0 之前的逐版本历史已从本报告移除）
+> 交接版本：**versionCode 6 / versionName "1.1.1"**
+> 报告版本：**V1.1.1**（按代码实况更新；V1.0 之前的逐版本历史已从本报告移除）
 > 代码规模：`app/src/main/java` 73 个 .kt / 13407 行；`app/src/test/java` 26 个 .kt / 3223 行 / **235 项测试 0 失败**
-> 产物：`build/apk/jijian-music-1.1.0-vc5-debug.apk`（23369778 B）
+> 产物：`build/apk/jijian-music-1.1.1-vc6.apk`（release 签名，字节数以 build/apk 实测为准）
 
 ---
 
@@ -280,7 +280,7 @@ V1.0.1 之前踩过的坑（**结论全部已被抽签语义取代，留作教�
 
 ```groovy
 ext.appVersionCode = 3
-ext.appVersionName = "1.1.0"
+ext.appVersionName = "1.1.1"
 ```
 
 改版本只改这两行，**不要**去动 `defaultConfig`。
@@ -291,7 +291,7 @@ QQ（及多数 IM 文件传输）**按「文件名 + 大小」去重**。此前�
 `app-debug.apk`，且相邻版本字节数相同，
 所以发新包给用户，QQ 认为「这个文件我已经有了」，**不认是新安装包**。
 
-`versionedApk` 把产物复制成 `jijian-music-1.1.0-vc5-debug.apk`——文件名唯一，问题消失。
+`versionedApk` 把产物复制成 `jijian-music-1.1.1-vc6.apk`——文件名唯一，问题消失。
 
 ### GitHub Actions（V1.0.3 起）
 
@@ -569,7 +569,7 @@ V1.0 的修法只补了一半。
 - [ ] 读 `player/RandomShuffle.kt` 的 KDoc + `RandomShuffle*` 五个测试类 + `ShuffleStallProbe` + `QueueMirrorTest` + `StallWatchdogTest`
 - [ ] 读 `ui/theme/OledTokens.kt` 与 `ui/neon/NeonTokens.kt`（改 UI 前必读）
 - [ ] 读本报告第九节，决定先还哪笔技术债
-- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.1.0-vc5-debug.apk`
+- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.1.1-vc6.apk`
       （`-d` 必需：`versionCode` 相对 6.x 时代的 26 是降级，系统默认拒绝）
 
 ---
@@ -583,10 +583,10 @@ $env:JAVA_HOME="C:\Program Files (x86)\Android\openjdk\jdk-21.0.8"; $env:ANDROID
 .\gradlew.bat :app:assembleDebug :app:versionedApk :app:testDebugUnitTest --no-daemon --console=plain
 
 # 看 APK 版本
-D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.1.0-vc5-debug.apk | Select-String versionCode
+D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.1.1-vc6.apk | Select-String versionCode
 
 # 验签
-D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.1.0-vc5-debug.apk
+D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.1.1-vc6.apk
 
 # 重新生成搜索 bundle
 cd D:\demo\lx-builder; node build.mjs

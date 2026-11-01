@@ -1,6 +1,6 @@
 # 极简music (JiJianMusic) for Android
 
-`applicationId = com.lxmusic.android` · 当前版本 **1.1.0** (`versionCode = 5`)
+`applicationId = com.lxmusic.android` · 当前版本 **1.1.1** (`versionCode = 6`)
 
 一个从 [lyswhut/lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) 的
 音源架构出发、逐步转型为**纯本地极简音乐播放器**的 Android 应用。
@@ -346,6 +346,30 @@ explains the root causes behind them.
 `NeonTokensTest` is the same idea for the visual layer: it recomputes WCAG
 contrast over the *brightest possible* aurora composite on every palette, so a
 future "make it pop more" tweak cannot silently drop body text below AA.
+
+---
+
+## V1.1.1 — One signing key for every build (`versionCode = 6`)
+
+Until now every APK was signed with the *debug* keystore of whichever machine
+built it. The local certificate and the GitHub Actions certificate differed, so
+the release download could never update a locally installed app — Android
+reported a signature conflict and demanded an uninstall.
+
+- `app/build.gradle` pins the `release` build type to `signing/jijian.keystore`
+  (kept in the repo; the file is the only copy of the key, treat it
+  accordingly). CI reads the same keystore from the `JIJIAN_KEYSTORE_B64`
+  secret; a local build without it falls back to the debug key for development
+  sideloading only.
+- `versionedApk` now publishes the **signed release** build as
+  `jijian-music-<v>-vc<c>.apk`; the debug artifact keeps its `-debug` suffix
+  via `versionedDebugApk`.
+- The CI release job decodes the keystore secret outside the work tree, so the
+  key material never lands in build artifacts.
+
+**One-time cost:** updating to 1.1.1 requires uninstalling the previous
+version — the certificate changes. Every release after this one updates in
+place.
 
 ---
 

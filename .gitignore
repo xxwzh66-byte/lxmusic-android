@@ -21,3 +21,8 @@ _dex/
 # Python helpers' caches (the _cnt.py / _per_class.py test counters)
 __pycache__/
 *.pyc
+
+# Signing material (the file itself IS tracked intentionally; block accidental copies)
+*.keystore.b64
+*.jks
+
