@@ -13,9 +13,6 @@ import java.io.File
 import com.google.common.util.concurrent.MoreExecutors
 import com.lxmusic.android.data.model.MusicInfo
 import com.lxmusic.android.lyric.Lyric
-import com.lxmusic.android.lyric.LyricLoader
-import com.lxmusic.android.source.LxQuality
-import com.lxmusic.android.source.SourceManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,7 +47,6 @@ data class PlayerState(
 
 /**
  * Drives ExoPlayer. Local tracks play straight from their file / content Uri;
- * online tracks resolve a stream URL through the custom-source [SourceManager].
  *
  * V1.0.1: shuffle is a **fresh draw per decision, in both directions**.
  *
@@ -69,8 +65,6 @@ data class PlayerState(
  */
 class PlayerController(
     private val context: Context,
-    private val sourceManager: SourceManager,
-    private val lyricLoader: LyricLoader = LyricLoader(context),
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
 ) {
     private val _state = MutableStateFlow(PlayerState())
@@ -101,6 +95,9 @@ class PlayerController(
 
     /** System audio effects bound to this player. */
     val equalizer = EqualizerController()
+
+    /** V1.1.0: 歌词装载/偏移/行号都归它（与 equalizer 对称的外设控制器）。 */
+    val lyricController = LyricController(scope)
 
     val queue = mutableListOf<MusicInfo>()
 
@@ -147,13 +144,10 @@ class PlayerController(
     ).also { it.target = PlayerTarget { controller } }
 
     /** Lyric timing calibration in milliseconds (positive = lyrics appear earlier). */
-    var lyricOffsetMs: Int = 0
 
     /** Whether a sibling `.lrc` file wins over embedded tags. */
-    var preferLrcFile: Boolean = true
 
     /** Whether embedded lyrics are read from the audio tags. */
-    var readEmbeddedLyric: Boolean = true
     var shuffle = false
 
     /**
@@ -455,8 +449,17 @@ class PlayerController(
     }
 
     /** Remove a queue entry. If it is the current track, advance appropriately. */
+    /**
+     * V1.1.0: the track just removed by [removeFromQueue], plus the slot it
+     * lived in, so the UI can offer one-tap undo. Null when there is nothing
+     * to undo (nothing removed yet, or the queue was cleared since).
+     */
+    var lastRemoved: Pair<MusicInfo, Int>? = null
+        private set
+
     fun removeFromQueue(position: Int) {
         if (position !in queue.indices) return
+        lastRemoved = queue[position] to position
         val r = QueueLogic.remove(queue, currentIndex, position)
         queue.clear(); queue.addAll(r.list); currentIndex = r.index
         if (queue.isEmpty()) {
@@ -471,8 +474,24 @@ class PlayerController(
         publishQueue()
     }
 
+    /**
+     * V1.1.0: put the last removed track back where it was. Best effort —
+     * a failed re-insert (queue cleared in between) just clears the memory.
+     */
+    fun undoQueueRemoval() {
+        val (music, at) = lastRemoved ?: return
+        lastRemoved = null
+        val slot = at.coerceIn(0, queue.size)
+        queue.add(slot, music)
+        if (slot <= currentIndex) currentIndex += 1
+        resetShuffle()
+        publishQueue()
+        if (!mirror.insert(listOf(music), slot)) scope.launch { playIndex(currentIndex) }
+    }
+
     fun clearQueue() {
         queue.clear()
+        lastRemoved = null
         currentIndex = -1
         shuffleState.invalidate()
         mirror.clear()
@@ -613,16 +632,10 @@ class PlayerController(
             queue = queue.toList(), queueIndex = currentIndex,
         )
 
-        val uri: Uri = try {
-            if (music.isLocal) {
-                localFileUri(music) ?: throw IllegalStateException("local track has no path")
-            } else {
-                val quality = pickQuality(music)
-                val url = withContext(Dispatchers.IO) { sourceManager.resolveMusicUrl(music, quality).url }
-                Uri.parse(url)
-            }
-        } catch (e: Exception) {
-            _state.value = _state.value.copy(error = e.message); return
+        val uri = localFileUri(music)
+        if (uri == null) {
+            _state.value = _state.value.copy(error = "local track has no path")
+            return
         }
 
         controller?.run {
@@ -642,20 +655,9 @@ class PlayerController(
         loadLyric(music)
     }
 
-    /** Lyrics: local files from disk/tags; online tracks have none. */
+    /** Lyrics: the controller owns reading and offsets; we only project state. */
     private fun loadLyric(music: MusicInfo) {
-        scope.launch {
-            val lyric = try {
-                if (music.isLocal) {
-                    lyricLoader.loadLocal(
-                        music.localPath ?: music.extra["uri"].orEmpty(),
-                        preferLrcFile = preferLrcFile,
-                        readEmbedded = readEmbeddedLyric,
-                    )
-                } else {
-                    Lyric(emptyList())
-                }
-            } catch (_: Exception) { Lyric(emptyList()) }
+        lyricController.load(music) { lyric ->
             _state.value = _state.value.copy(lyric = lyric)
         }
     }
@@ -664,18 +666,6 @@ class PlayerController(
     private fun attachEqualizer() {
         val session = com.lxmusic.android.player.PlayerHolder.player?.audioSessionId ?: 0
         if (session != 0) equalizer.attach(session)
-    }
-
-    /** Preferred quality id from settings ("128k"/"320k"/"flac"/"flac24bit"); null = no preference. */
-    var preferredQualityId: String? = null
-
-    private fun pickQuality(music: MusicInfo): LxQuality {
-        // A5: user preference first, then best-available fallback.
-        preferredQualityId?.let { pref ->
-            if (music.qualitys.containsKey(pref)) return LxQuality.fromId(pref) ?: LxQuality.K128
-        }
-        val order = listOf(LxQuality.FLAC24BIT, LxQuality.FLAC, LxQuality.K320, LxQuality.K128)
-        return order.firstOrNull { music.qualitys.containsKey(it.id) } ?: LxQuality.K128
     }
 
     fun togglePlayPause() {
@@ -859,7 +849,7 @@ class PlayerController(
             while (true) {
                 controller?.let { c ->
                     val pos = c.currentPosition.coerceAtLeast(0)
-                    val lyricIdx = _state.value.lyric.indexAt(pos + lyricOffsetMs)
+                    val lyricIdx = lyricController.indexAt(_state.value.lyric, pos)
                     _state.value = _state.value.copy(
                         positionMs = pos,
                         durationMs = c.duration.coerceAtLeast(0),
@@ -897,7 +887,8 @@ class PlayerController(
         }
     }
 
-    private val watchdog = StallWatchdog()
+    // V1.1.0: not private any more so settings can retune thresholds at runtime.
+    val watchdog = StallWatchdog()
 
     /**
      * V6.1: first response to a frozen position - ask ExoPlayer to re-prepare
@@ -929,15 +920,9 @@ class PlayerController(
         val pos = c.currentPosition.coerceAtLeast(0)
         Log.w(TAG, "playback still frozen at ${pos}ms, rebuilding source for ${music.id}")
         scope.launch {
-            val uri: Uri = try {
-                if (music.isLocal) {
-                    localFileUri(music) ?: return@launch
-                } else {
-                    val quality = pickQuality(music)
-                    Uri.parse(withContext(Dispatchers.IO) { sourceManager.resolveMusicUrl(music, quality).url })
-                }
-            } catch (e: Exception) {
-                _state.value = _state.value.copy(error = e.message)
+            val uri = localFileUri(music)
+            if (uri == null) {
+                _state.value = _state.value.copy(error = "local track has no path")
                 return@launch
             }
             watchdog.reset()

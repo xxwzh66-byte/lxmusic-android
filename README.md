@@ -1,6 +1,6 @@
 # 极简music (JiJianMusic) for Android
 
-`applicationId = com.lxmusic.android` · 当前版本 **1.0.3** (`versionCode = 4`)
+`applicationId = com.lxmusic.android` · 当前版本 **1.1.0** (`versionCode = 5`)
 
 一个从 [lyswhut/lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) 的
 音源架构出发、逐步转型为**纯本地极简音乐播放器**的 Android 应用。
@@ -346,6 +346,69 @@ explains the root causes behind them.
 `NeonTokensTest` is the same idea for the visual layer: it recomputes WCAG
 contrast over the *brightest possible* aurora composite on every palette, so a
 future "make it pop more" tweak cannot silently drop body text below AA.
+
+---
+
+## V1.1.0 — Lean to the core: local-only, listening-first (`versionCode = 5`)
+
+The biggest release since the 1.0 renumbering, and most of it is *subtraction*.
+
+### Removed: the whole online-search stack
+
+`jsengine/` (WebView script runtime + search bridge), `source/` (custom-source
+manager, LX models, KW provider), `OnlineScreen`, `FeatureFlags`, the bundled
+`assets/jsengine/*.js` (~40 KB of JS), and the `user_api` table wiring are gone.
+`PlayerController` no longer takes a `SourceManager`: every track is local, so
+`playIndex`/`rebuildFrozenSource` resolve a `file:///` path directly and the
+quality-picker (`preferredQualityId`/`pickQuality`) died with it. The APK
+carries no WebView-engine code path any more.
+
+### Home is now "listening first"
+
+The first tab relabels from 本地音乐 to **正在听**: the last-played hero card is
+joined by a horizontal rail of recently played covers, and the raw track list
+retreats below them. The point of the app is "open it and keep listening" —
+the home screen now agrees.
+
+### Smaller UX repairs
+
+- **Queue removal is undoable** — a snackbar ("已移除「…」· 撤销") appears after
+  `queueRemove`; `PlayerController` remembers the removed track and its slot and
+  `undoQueueRemoval()` puts it back (adjusting `currentIndex` when needed).
+- **Missing-cover filter** — a 缺封面 chip shows only tracks without artwork,
+  and cover-less rows carry a small amber badge (`missingCoverBadge`).
+  `TrackRow` gained a `modifier` parameter for it.
+
+### Visual
+
+- **Aurora follows the album** — the home shell now extracts the dominant
+  colour of the current track's cover (`ArtworkColors.schemeFor`, one IO pass
+  per track change) and feeds it into `rememberNeonSurface(artworkTint = …)`;
+  the palette seed remains the fallback. Hue only — the brightness budget that
+  `NeonTokensTest` locks is untouched.
+- **Two-pane wide layout** — at ≥ 840 dp the shell and the full
+  `NowPlayingScreen` sit side by side instead of the player taking over. The
+  shell was extracted into a reusable `HomeShell` composable to make that
+  possible.
+
+### Engineering
+
+- **`LyricController`** — lyric loading, offset and line-index moved out of
+  `PlayerController` (symmetric with `EqualizerController`); settings write to
+  `lyricController.offsetMs/preferLrcFile/readEmbedded`.
+- **Settings write funnel** — `SettingsStore.update(transform)` is the single
+  write path: current snapshot → transform → `writeAll(new)`, whose read/write
+  sides live in the same companion so a mistyped key cannot split again. Every
+  existing setter is now one line over it.
+- **Configurable watchdog** — 卡住判定/缓冲超时 sliders in a new 高级 settings
+  section; `StallWatchdog.stallMs/bufferingMs` are mutable and re-read every
+  tick.
+
+### Verification
+
+`build/apk/jijian-music-1.1.0-vc5-debug.apk` (23,369,778 B), `versionCode = 5`,
+`versionName = 1.1.0`, confirmed with `aapt2 dump badging`. 235 unit tests
+across 26 classes, 0 failures.
 
 ---
 

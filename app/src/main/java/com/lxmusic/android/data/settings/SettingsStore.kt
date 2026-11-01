@@ -88,6 +88,10 @@ data class AppSettings(
      * 启动静默检查用它节流到每 24h 一次；手动检查不节流。
      */
     val lastUpdateCheckAt: Long = 0L,
+
+    /** V1.1.0: 卡死看门狗阈值（毫秒）。默认值即 V6.1 调好的 8s/20s。 */
+    val watchdogStallMs: Long = 8_000L,
+    val watchdogBufferingMs: Long = 20_000L,
 )
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -128,22 +132,33 @@ class SettingsStore private constructor(context: Context) {
 
     // ---------------- setters ----------------
 
-    fun setThemeMode(mode: ThemeMode) = edit { it[KEY_THEME_MODE] = mode.name }
-    fun setThemeColor(id: String) = edit { it[KEY_THEME_COLOR] = id }
-    fun setListStyle(style: ListStyle) = edit { it[KEY_LIST_STYLE] = style.name }
-    fun setAutoScan(on: Boolean) = edit { it[KEY_AUTO_SCAN] = on }
-    fun setReadEmbeddedCover(on: Boolean) = edit { it[KEY_READ_COVER] = on }
-    fun setQuality(q: AudioQuality) = edit { it[KEY_QUALITY] = q.name }
-    fun setRecordHistory(on: Boolean) = edit { it[KEY_RECORD_HISTORY] = on }
-    fun setRecordStats(on: Boolean) = edit { it[KEY_RECORD_STATS] = on }
-    fun setPauseOnHeadsetUnplug(on: Boolean) = edit { it[KEY_PAUSE_UNPLUG] = on }
-    fun setLyricFontScale(v: Float) = edit { it[KEY_LYRIC_SCALE] = v }
-    fun setLyricOffset(ms: Int) = edit { it[KEY_LYRIC_OFFSET] = ms }
-    fun setPreferLrcFile(on: Boolean) = edit { it[KEY_PREFER_LRC] = on }
+    /**
+     * V1.1.0: 设置变更的唯一写入口。
+     *
+     * 之前每个偏好一对 setter（一个写、readSettings 里一个读），加一个设置项要
+     * 改两处、键名还得对齐——"均衡器不保存"那类 bug 的根因就是读写键名拼错不报
+     * 错。现在 transform 拿到当前快照返回新快照，writeAll 负责把**每个字段**写回
+     * 它的 KEY；新增偏好只需要在 AppSettings 加字段 + writeAll 加一行，不再有
+     * 第二处 setter。
+     */
+    fun update(transform: (AppSettings) -> AppSettings) = edit { writeAll(it, transform(_state.value)) }
 
-    fun setPlayerSkin(skin: String) = edit { it[KEY_PLAYER_SKIN] = skin }
+    fun setThemeMode(mode: ThemeMode) = update { it.copy(themeMode = mode) }
+    fun setThemeColor(id: String) = update { it.copy(themeColor = id) }
+    fun setListStyle(style: ListStyle) = update { it.copy(listStyle = style) }
+    fun setAutoScan(on: Boolean) = update { it.copy(autoScanOnStart = on) }
+    fun setReadEmbeddedCover(on: Boolean) = update { it.copy(readEmbeddedCover = on) }
+    fun setQuality(q: AudioQuality) = update { it.copy(quality = q) }
+    fun setRecordHistory(on: Boolean) = update { it.copy(recordHistory = on) }
+    fun setRecordStats(on: Boolean) = update { it.copy(recordStats = on) }
+    fun setPauseOnHeadsetUnplug(on: Boolean) = update { it.copy(pauseOnHeadsetUnplug = on) }
+    fun setLyricFontScale(v: Float) = update { it.copy(lyricFontScale = v) }
+    fun setLyricOffset(ms: Int) = update { it.copy(lyricOffsetMs = ms) }
+    fun setPreferLrcFile(on: Boolean) = update { it.copy(preferLrcFile = on) }
 
-    fun setShowPlayerMeta(on: Boolean) = edit { it[KEY_SHOW_PLAYER_META] = on }
+    fun setPlayerSkin(skin: String) = update { it.copy(playerSkin = skin) }
+
+    fun setShowPlayerMeta(on: Boolean) = update { it.copy(showPlayerMeta = on) }
 
     /** V5.1-3: persist the currently playing track and its resume position. */
     fun setLastPlayed(id: String?, posMs: Long) = edit {
@@ -168,6 +183,11 @@ class SettingsStore private constructor(context: Context) {
 
     /** V1.0.3: 静默检查更新的节流时间戳（写入时机由调用方决定，这里只存）。 */
     fun setLastUpdateCheckAt(atMs: Long) = edit { it[KEY_LAST_UPDATE_CHECK] = atMs }
+
+    /** V1.1.0: 卡死看门狗阈值。 */
+    fun setWatchdogThresholds(stallMs: Long, bufferingMs: Long) = update {
+        it.copy(watchdogStallMs = stallMs, watchdogBufferingMs = bufferingMs)
+    }
 
     fun addScanFolder(uri: String) = edit { prefs ->
         prefs[KEY_SCAN_FOLDERS] = (prefs[KEY_SCAN_FOLDERS] ?: emptySet()) + uri
@@ -228,6 +248,48 @@ class SettingsStore private constructor(context: Context) {
         }
 
         /**
+         * V1.1.0: [toSettings] 的逆操作——把快照的**每个字段**写回它的 KEY。
+         * 与读侧放在同一个 companion 里，键名永远成对出现；[update] 是唯一调用方。
+         */
+        private fun writeAll(prefs: MutablePreferences, s: AppSettings) {
+            prefs[KEY_THEME_MODE] = s.themeMode.name
+            prefs[KEY_THEME_COLOR] = s.themeColor
+            prefs[KEY_LIST_STYLE] = s.listStyle.name
+            prefs[KEY_SCAN_FOLDERS] = s.scanFolders
+            prefs[KEY_MANUAL_URIS] = s.manualUris
+            prefs[KEY_AUTO_SCAN] = s.autoScanOnStart
+            prefs[KEY_READ_COVER] = s.readEmbeddedCover
+            prefs[KEY_QUALITY] = s.quality.name
+            prefs[KEY_RECORD_HISTORY] = s.recordHistory
+            prefs[KEY_RECORD_STATS] = s.recordStats
+            prefs[KEY_PAUSE_UNPLUG] = s.pauseOnHeadsetUnplug
+            prefs[KEY_LYRIC_SCALE] = s.lyricFontScale
+            prefs[KEY_LYRIC_OFFSET] = s.lyricOffsetMs
+            prefs[KEY_PREFER_LRC] = s.preferLrcFile
+            prefs[KEY_PLAYER_SKIN] = s.playerSkin
+            prefs[KEY_SHOW_PLAYER_META] = s.showPlayerMeta
+            if (s.lastPlayedId == null) {
+                prefs.remove(KEY_LAST_PLAYED_ID)
+                prefs.remove(KEY_LAST_PLAYED_POS)
+            } else {
+                prefs[KEY_LAST_PLAYED_ID] = s.lastPlayedId
+                prefs[KEY_LAST_PLAYED_POS] = s.lastPlayedPosMs
+            }
+            prefs[KEY_REPEAT_MODE] = s.repeatMode
+            prefs[KEY_SHUFFLE] = s.shuffle
+            prefs[KEY_EQ_ENABLED] = s.eq.enabled
+            s.eq.preset?.let { prefs[KEY_EQ_PRESET] = it } ?: prefs.remove(KEY_EQ_PRESET)
+            prefs[KEY_EQ_BANDS] = EqProfile.encodeBands(s.eq.bands)
+            prefs[KEY_EQ_BASS] = s.eq.bass
+            prefs[KEY_EQ_VIRTUALIZER] = s.eq.virtualizer
+            prefs[KEY_EQ_LOUDNESS] = s.eq.loudnessMb
+            prefs[KEY_UPDATE_TOKEN] = s.updateToken
+            prefs[KEY_LAST_UPDATE_CHECK] = s.lastUpdateCheckAt
+            prefs[KEY_WATCHDOG_STALL] = s.watchdogStallMs
+            prefs[KEY_WATCHDOG_BUFFERING] = s.watchdogBufferingMs
+        }
+
+        /**
          * V1.0.2: 访问令牌的写入侧，与 [writeEq] 同一个理由抽出来——
          * 读写两侧键名拼错不报错，只是永远读回默认值。
          */
@@ -274,6 +336,8 @@ class SettingsStore private constructor(context: Context) {
             ),
             updateToken = this[KEY_UPDATE_TOKEN] ?: "",
             lastUpdateCheckAt = this[KEY_LAST_UPDATE_CHECK] ?: 0L,
+            watchdogStallMs = this[KEY_WATCHDOG_STALL] ?: 8_000L,
+            watchdogBufferingMs = this[KEY_WATCHDOG_BUFFERING] ?: 20_000L,
         )
 
         internal val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
@@ -306,5 +370,7 @@ class SettingsStore private constructor(context: Context) {
 
         /** V1.0.3: 启动静默检查更新的节流时间戳。 */
         internal val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_at")
+        internal val KEY_WATCHDOG_STALL = longPreferencesKey("watchdog_stall_ms")
+        internal val KEY_WATCHDOG_BUFFERING = longPreferencesKey("watchdog_buffering_ms")
         }
 }

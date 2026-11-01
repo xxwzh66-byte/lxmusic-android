@@ -19,11 +19,15 @@ plugins {
 // 弹「更新内容公告」；仓库是私有的，所以同时加「访问令牌」设置项（留空则匿名
 // 请求，拿不到就明说原因）。
 //
+// V1.1.0: 一次大版本整理——在线搜索栈（jsengine/source/WebView 引擎）整体移除，
+// 主页改「正在听」优先、队列移除可撤销、缺封面筛、极光随封面主色、平板双栏；
+// 工程面抽出 LyricController、设置写入收口为 update(transform)、看门狗阈值可配。
+//
 // V1.0.3: 启动静默检查更新（每 24h 一次，节流时间戳持久化），发现新版本在首页
 // 标签栏上方挂公告条；同时清理死代码（allowShowUpdateAlert、过时设计文档归档），
 // 并新增 GitHub Actions：push 自动跑测试、打 v* tag 自动构建并发 Release。
-ext.appVersionCode = 4
-ext.appVersionName = "1.0.3"
+ext.appVersionCode = 5
+ext.appVersionName = "1.1.0"
 
 android {
     namespace = "com.lxmusic.android"

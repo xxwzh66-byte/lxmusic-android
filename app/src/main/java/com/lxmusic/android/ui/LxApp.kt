@@ -43,6 +43,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,11 +60,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.lxmusic.android.FeatureFlags
 import com.lxmusic.android.data.model.MusicInfo
+import com.lxmusic.android.player.PlayerState
+import com.lxmusic.android.data.settings.AppSettings
 import com.lxmusic.android.net.UpdateInfo
 import com.lxmusic.android.ui.UpdateStatus
 import com.lxmusic.android.ui.screens.UpdateDialog
+import com.lxmusic.android.ui.components.ArtworkColors
 import com.lxmusic.android.ui.components.Cover
 import com.lxmusic.android.ui.components.HintIconButton
 import com.lxmusic.android.ui.components.TrackActionsSheet
@@ -82,7 +85,6 @@ import com.lxmusic.android.ui.neon.rememberNeonSurface
 import com.lxmusic.android.ui.screens.EqualizerScreen
 import com.lxmusic.android.ui.screens.LocalScreen
 import com.lxmusic.android.ui.screens.LibraryScreen
-import com.lxmusic.android.ui.screens.OnlineScreen
 import com.lxmusic.android.ui.components.PlayerSkin
 import com.lxmusic.android.ui.components.toast
 import com.lxmusic.android.ui.screens.NowPlayingScreen
@@ -94,6 +96,8 @@ import com.lxmusic.android.ui.screens.FolderManagerScreen
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LxApp(viewModel: MainViewModel) {
+    // V1.1.0: 平板/横屏（>= 840dp）双栏——左列表右播放页，播放不再是"全屏接管"。
+    val wide = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 840
     val tab by viewModel.tab.collectAsState()
     val playerState by viewModel.player.collectAsState()
     val libraryState by viewModel.library.collectAsState()
@@ -149,6 +153,50 @@ fun LxApp(viewModel: MainViewModel) {
         EqualizerScreen(viewModel = viewModel, onBack = { showEqualizer = false })
         return
     }
+    if (showNowPlaying && playerState.current != null && wide) {
+        // V1.1.0: 宽屏双栏。左栏是完整主壳，右栏是同一个 NowPlayingScreen；
+        // 播放页右上角的返回钮收起右栏，回到单栏主界面。
+        BackHandler { showNowPlaying = false }
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.weight(0.55f)) {
+                HomeShell(
+                    viewModel = viewModel,
+                    tab = tab,
+                    playerState = playerState,
+                    libraryState = libraryState,
+                    settings = settings,
+                    updateState = updateState,
+                    themeColor = themeColor,
+                    onOpenNowPlaying = {},
+                    onShowQueue = { showQueue = true },
+                    onShowEqualizer = { showEqualizer = true },
+                    onOpenUpdateDialog = { showUpdateDialog = true },
+                    onActionTarget = { music -> actionTarget = music; actionRemoveContext = null },
+                    onActionLibraryTarget = { music, playlistId -> actionTarget = music; actionRemoveContext = playlistId },
+                )
+            }
+            NowPlayingScreen(
+                state = playerState,
+                lyricFontScale = settings.lyricFontScale,
+                skin = PlayerSkin.from(settings.playerSkin),
+                onSkinSelected = { sk -> viewModel.setPlayerSkin(sk.name) },
+                showMeta = settings.showPlayerMeta,
+                themeColor = settings.themeColor,
+                isFavorite = playerState.current?.id?.let { it in libraryState.favoriteIds } ?: false,
+                onBack = { showNowPlaying = false },
+                onTogglePlay = viewModel::togglePlayPause,
+                onNext = viewModel::next,
+                onPrev = viewModel::prev,
+                onSeek = viewModel::seekTo,
+                onToggleRepeat = { viewModel.cycleRepeat() },
+                onToggleShuffle = { viewModel.toggleShuffle() },
+                onToggleFavorite = { playerState.current?.let { viewModel.toggleFavorite(it) } },
+                onOpenQueue = { showQueue = true },
+                onOpenEqualizer = { showEqualizer = true },
+            )
+        }
+        return
+    }
     if (showNowPlaying && playerState.current != null) {
         BackHandler { showNowPlaying = false }
         NowPlayingScreen(
@@ -173,91 +221,21 @@ fun LxApp(viewModel: MainViewModel) {
         return
     }
 
-    // V6.0: 主界面共用播放页的极光，但压暗——列表正文必须比氛围更重要。
-    // 压的是极光峰值而不是再盖一层黑，所以色相还在，只是不再抢戏。
-    // 深浅两套材质的数值在 NeonSurface.kt 里，这里只做选择。
-    val surface = rememberNeonSurface(
-        dark = MaterialTheme.colorScheme.surface.luminance() <= 0.5f,
+    HomeShell(
+        viewModel = viewModel,
+        tab = tab,
+        playerState = playerState,
+        libraryState = libraryState,
+        settings = settings,
+        updateState = updateState,
         themeColor = themeColor,
+        onOpenNowPlaying = { showNowPlaying = true },
+        onShowQueue = { showQueue = true },
+        onShowEqualizer = { showEqualizer = true },
+        onOpenUpdateDialog = { showUpdateDialog = true },
+        onActionTarget = { music -> actionTarget = music; actionRemoveContext = null },
+        onActionLibraryTarget = { music, playlistId -> actionTarget = music; actionRemoveContext = playlistId },
     )
-    Box(Modifier.fillMaxSize()) {
-        AuroraBackdrop(
-            colors = surface.auroraColors,
-            animate = rememberMotionEnabled(),
-            dim = surface.dim,
-            baseColor = surface.baseColor,
-            scrims = false,
-        )
-
-        Scaffold(
-            // 透明容器：让极光从状态栏一路透到导航栏。
-            containerColor = Color.Transparent,
-            topBar = {
-                NeonHomeTopBar(
-                    themeColor = themeColor,
-                    onOpenQueue = { showQueue = true },
-                    onOpenStats = { viewModel.openStats() },
-                    onOpenEqualizer = { showEqualizer = true },
-                    onOpenSettings = { viewModel.openSettings() },
-                )
-            },
-            bottomBar = {
-                MiniPlayer(
-                    state = playerState,
-                    themeColor = themeColor,
-                    surface = surface,
-                    onClick = { showNowPlaying = true },
-                    onToggle = viewModel::togglePlayPause,
-                    onNext = viewModel::next,
-                )
-            },
-        ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                // V1.0.3: 有新版本时在标签栏上方挂一条公告，点按弹出「更新内容」。
-                val up = updateState
-                if (up.status == UpdateStatus.AVAILABLE && up.latest != null) {
-                    UpdateBanner(
-                        info = up.latest,
-                        current = up.currentVersion,
-                        themeColor = themeColor,
-                        onOpen = { showUpdateDialog = true },
-                    )
-                }
-                val visibleTabs = remember {
-                    if (FeatureFlags.ONLINE_ENABLED) HomeTab.entries.toList()
-                    else HomeTab.entries.filter { it != HomeTab.ONLINE }
-                }
-                NeonTabRow(
-                    labels = visibleTabs.map { it.label },
-                    selectedIndex = visibleTabs.indexOf(tab).coerceAtLeast(0),
-                    onSelect = { i -> visibleTabs.getOrNull(i)?.let { viewModel.setTab(it) } },
-                    themeColor = themeColor,
-                )
-
-                when (tab) {
-                    HomeTab.LOCAL -> LocalScreen(
-                        viewModel = viewModel,
-                        onLongPress = { actionTarget = it; actionRemoveContext = null },
-                    )
-                    HomeTab.LIBRARY -> LibraryScreen(
-                        viewModel = viewModel,
-                        onLongPress = { music, playlistId ->
-                            actionTarget = music; actionRemoveContext = playlistId
-                        },
-                    )
-                    HomeTab.ONLINE -> if (FeatureFlags.ONLINE_ENABLED) {
-                        OnlineScreen(
-                            viewModel = viewModel,
-                            onLongPress = { actionTarget = it; actionRemoveContext = null },
-                        )
-                    } else {
-                        // Online is compiled in but disabled: never render the engine-backed screen.
-                        Box(Modifier.fillMaxSize())
-                    }
-                }
-            }
-        }
-    }
 
     actionTarget?.let { music ->
         val isLocal = music.isLocal
@@ -277,10 +255,6 @@ fun LxApp(viewModel: MainViewModel) {
         )
     }
 
-    // V1.0.3: 首页公告条点开的「更新内容」对话框，复用设置页的 UpdateDialog。
-    if (showUpdateDialog) {
-        UpdateDialog(state = updateState, onDismiss = { showUpdateDialog = false })
-    }
 }
 
 /**
@@ -331,6 +305,115 @@ private fun UpdateBanner(
             )
         }
         NeonDot(color = NeonTokens.brandGradient(themeColor)[1], pulse = true)
+    }
+}
+
+/**
+ * V1.1.0: 主壳抽成独立 composable——宽屏双栏需要在左栏里再渲染一次完整主界面，
+ * 内联在 LxApp 里的巨块状态写回没法复用。所有"打开某页"都走回调。
+ */
+@Composable
+private fun HomeShell(
+    viewModel: MainViewModel,
+    tab: HomeTab,
+    playerState: PlayerState,
+    libraryState: LibraryUiState,
+    settings: AppSettings,
+    updateState: UpdateCheckState,
+    themeColor: String,
+    onOpenNowPlaying: () -> Unit,
+    onShowQueue: () -> Unit,
+    onShowEqualizer: () -> Unit,
+    onOpenUpdateDialog: () -> Unit,
+    onActionTarget: (MusicInfo) -> Unit,
+    onActionLibraryTarget: (MusicInfo, Long?) -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // V1.0.3: 公告条对话框状态跟壳走。
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    if (showUpdateDialog) {
+        UpdateDialog(state = updateState, onDismiss = { showUpdateDialog = false })
+    }
+
+    // V6.0: 主界面共用播放页的极光，但压暗——列表正文必须比氛围更重要。
+    // 压的是极光峰值而不是再盖一层黑，所以色相还在，只是不再抢戏。
+    // 深浅两套材质的数值在 NeonSurface.kt 里，这里只做选择。
+    // V1.1.0: 极光跟随当前曲目封面主色——"这个播放器认得这首歌"。
+    // 提色在 IO 线程做一次并 remember，封面不变就不重算；提不出来回落调色板。
+    val artworkTint by produceState<androidx.compose.ui.graphics.Color?>(
+        initialValue = null,
+        key1 = playerState.current?.id,
+    ) {
+        value = ArtworkColors.schemeFor(context, playerState.current?.img).primary
+    }
+    val surface = rememberNeonSurface(
+        dark = MaterialTheme.colorScheme.surface.luminance() <= 0.5f,
+        themeColor = themeColor,
+        artworkTint = artworkTint,
+    )
+    Box(Modifier.fillMaxSize()) {
+        AuroraBackdrop(
+            colors = surface.auroraColors,
+            animate = rememberMotionEnabled(),
+            dim = surface.dim,
+            baseColor = surface.baseColor,
+            scrims = false,
+        )
+
+        Scaffold(
+            // 透明容器：让极光从状态栏一路透到导航栏。
+            containerColor = Color.Transparent,
+            topBar = {
+                NeonHomeTopBar(
+                    themeColor = themeColor,
+                    onOpenQueue = onShowQueue,
+                    onOpenStats = { viewModel.openStats() },
+                    onOpenEqualizer = onShowEqualizer,
+                    onOpenSettings = { viewModel.openSettings() },
+                )
+            },
+            bottomBar = {
+                MiniPlayer(
+                    state = playerState,
+                    themeColor = themeColor,
+                    surface = surface,
+                    onClick = onOpenNowPlaying,
+                    onToggle = viewModel::togglePlayPause,
+                    onNext = viewModel::next,
+                )
+            },
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                // V1.0.3: 有新版本时在标签栏上方挂一条公告，点按弹出「更新内容」。
+                val up = updateState
+                if (up.status == UpdateStatus.AVAILABLE && up.latest != null) {
+                    UpdateBanner(
+                        info = up.latest,
+                        current = up.currentVersion,
+                        themeColor = themeColor,
+                        onOpen = onOpenUpdateDialog,
+                    )
+                }
+                val visibleTabs = remember { HomeTab.entries }
+                NeonTabRow(
+                    labels = visibleTabs.map { it.label },
+                    selectedIndex = visibleTabs.indexOf(tab).coerceAtLeast(0),
+                    onSelect = { i -> visibleTabs.getOrNull(i)?.let { viewModel.setTab(it) } },
+                    themeColor = themeColor,
+                )
+
+                when (tab) {
+                    HomeTab.LOCAL -> LocalScreen(
+                        viewModel = viewModel,
+                        onLongPress = onActionTarget,
+                    )
+                    HomeTab.LIBRARY -> LibraryScreen(
+                        viewModel = viewModel,
+                        onLongPress = onActionLibraryTarget,
+                    )
+                }
+            }
+        }
     }
 }
 

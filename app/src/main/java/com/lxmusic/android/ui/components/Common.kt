@@ -31,6 +31,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -54,7 +56,7 @@ fun Cover(url: String?, size: Dp, modifier: Modifier = Modifier) {
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center,
     ) {
-        if (url != null) {
+        if (!url.isNullOrBlank()) {
             AsyncImage(
                 model = url, contentDescription = null,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
@@ -64,6 +66,19 @@ fun Cover(url: String?, size: Dp, modifier: Modifier = Modifier) {
         }
     }
 }
+
+/**
+ * V1.1.0: 封面右上角的「缺封面」小角标。叠在 [Cover] 上用的实心圆点，
+ * 不放大字——列表行高有限，一个可辨的标记比一行文案有用。
+ */
+fun Modifier.missingCoverBadge(size: Dp = 10.dp): Modifier = this.then(
+    Modifier
+        .drawWithContent {
+            drawContent()
+            drawCircle(Color(0xFFF2B23B), radius = size.toPx() / 2f,
+                center = Offset(this.size.width - size.toPx(), size.toPx()))
+        }
+)
 
 /**
  * A single track row. Long-press opens the actions sheet.
@@ -81,6 +96,7 @@ fun TrackRow(
     onLongClick: (() -> Unit)? = null,
     showDuration: Boolean = true,
     active: Boolean = false,
+    modifier: Modifier = Modifier,
     trailing: @Composable () -> Unit = {},
 ) {
     // A1: density follows SettingsStore.listStyle; STANDARD keeps the legacy pixels.
@@ -105,7 +121,8 @@ fun TrackRow(
         label = "rowActive",
     )
     Row(
-        Modifier.fillMaxWidth()
+        modifier
+            .fillMaxWidth()
             .drawBehind {
                 if (highlight > 0.01f) {
                     drawRect(accent.copy(alpha = 0.07f * highlight))

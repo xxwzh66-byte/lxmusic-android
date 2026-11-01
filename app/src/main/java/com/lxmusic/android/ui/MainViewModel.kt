@@ -39,12 +39,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import com.lxmusic.android.source.LxSource
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
@@ -52,18 +52,10 @@ import kotlinx.coroutines.launch
 
 /** Top-level tabs. */
 enum class HomeTab(val label: String) {
-    LOCAL("本地音乐"),
+    /** V1.1.0: the default tab is "continue listening", not a raw track list. */
+    LOCAL("正在听"),
     LIBRARY("音乐库"),
-    ONLINE("在线搜索"),
 }
-
-data class SearchUiState(
-    val keyword: String = "",
-    val source: LxSource = LxSource.KW,
-    val loading: Boolean = false,
-    val results: List<MusicInfo> = emptyList(),
-    val error: String? = null,
-)
 
 data class LocalUiState(
     val loading: Boolean = false,
@@ -71,6 +63,8 @@ data class LocalUiState(
     val group: LocalGroup = LocalGroup.SONGS,
     val sort: LocalSort = LocalSort.TITLE_ASC,
     val query: String = "",
+    /** V1.1.0: 只看缺封面的歌（img 为空）。 */
+    val missingCoverOnly: Boolean = false,
     /** Current visible songs (respecting search + group). */
     val songs: List<MusicInfo> = emptyList(),
     /** Album/artist groups (empty when grouping by songs). */
@@ -122,7 +116,6 @@ data class UpdateCheckState(
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val sourceManager = LxApp.instance.sourceManager
     private val localScanner = LocalMusicScanner(app)
     private val safScanner = SafMusicScanner(app)
     private val repo = MusicRepository(app)
@@ -130,9 +123,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _tab = MutableStateFlow(HomeTab.LOCAL)
     val tab: StateFlow<HomeTab> = _tab.asStateFlow()
-
-    private val _search = MutableStateFlow(SearchUiState())
-    val search: StateFlow<SearchUiState> = _search.asStateFlow()
 
     private val _local = MutableStateFlow(LocalUiState())
     val local: StateFlow<LocalUiState> = _local.asStateFlow()
@@ -146,7 +136,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _equalizer = MutableStateFlow(EqualizerState())
     val equalizer: StateFlow<EqualizerState> = _equalizer.asStateFlow()
 
-    val playerController = PlayerController(app, sourceManager)
+    val playerController = PlayerController(app)
 
     /** V5.1-1: fired when a user tap should open the full-screen player. */
     val openNowPlaying = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
@@ -157,9 +147,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         playerController.setQueue(list, index)
         openNowPlaying.tryEmit(Unit)
     }
-
-    private val _loadedApiId = MutableStateFlow<String?>(null)
-    val loadedApiId: StateFlow<String?> = _loadedApiId.asStateFlow()
 
     /** User preferences (theme, folders, playback, lyrics). */
     val settings: StateFlow<AppSettings> = settingsStore.state
@@ -245,6 +232,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val lastPlayed: StateFlow<MusicInfo?> = combine(settingsStore.state, _local) { st, lib ->
         st.lastPlayedId?.let { id -> lib.allTracks.firstOrNull { it.id == id } }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * V1.1.0: 最近播过的本地曲目（play_history 表，已按 id 去重），给
+     * 「正在听」页的最近一排横滑封面用。空着不代表错——第一次扫描完就是空的。
+     */
+    val recentLocal: StateFlow<List<MusicInfo>> = _library
+        .map { lib -> lib.recent.filter { it.isLocal }.distinctBy { it.id }.take(12) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** V5.3-2: resume the card track inside the whole local queue. */
     fun resumeLastPlayed() {
@@ -452,13 +447,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Mirrors lyric-related preferences onto the player. */
     private fun applyPlaybackSettings(s: AppSettings) {
-        // A5: AudioQuality's label *is* the LxQuality id ("128k"/"320k"/"flac"),
-        // so the mapping is the enum itself - spelling the strings out again here
-        // just gave them a second place to drift.
-        playerController.preferredQualityId = s.quality.label
-        playerController.lyricOffsetMs = s.lyricOffsetMs
-        playerController.preferLrcFile = s.preferLrcFile
-        playerController.readEmbeddedLyric = true
+        // V1.1.0: 歌词三个偏好现在住在 LyricController（与 equalizer 对称）。
+        playerController.lyricController.offsetMs = s.lyricOffsetMs
+        playerController.lyricController.preferLrcFile = s.preferLrcFile
+        playerController.lyricController.readEmbedded = true
+        // 卡死看门狗阈值跟着设置走。
+        playerController.watchdog.stallMs = s.watchdogStallMs
+        playerController.watchdog.bufferingMs = s.watchdogBufferingMs
     }
 
     fun setTab(t: HomeTab) {
@@ -526,6 +521,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         recomputeLocal()
     }
 
+    /** V1.1.0: 只看缺封面的歌。 */
+    fun setMissingCoverOnly(on: Boolean) {
+        _local.value = _local.value.copy(missingCoverOnly = on)
+    }
+
     fun setLocalSort(sort: LocalSort) {
         _local.value = _local.value.copy(sort = sort)
         recomputeLocal()
@@ -533,7 +533,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun recomputeLocal() {
         val s = _local.value
-        val filtered = LocalLibrary.sort(LocalLibrary.search(s.allTracks, s.query), s.sort)
+        val base = if (s.missingCoverOnly) s.allTracks.filter { it.img.isNullOrBlank() } else s.allTracks
+        val filtered = LocalLibrary.sort(LocalLibrary.search(base, s.query), s.sort)
         when (s.group) {
             LocalGroup.SONGS ->
                 _local.value = s.copy(songs = filtered, groups = emptyList())
@@ -551,30 +552,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playGroup(group: MusicGroup, startIndex: Int = 0) {
         if (group.tracks.isNotEmpty()) playerController.setQueue(group.tracks, startIndex)
-    }
-
-    // ---------------- online search ----------------
-
-    fun setKeyword(k: String) { _search.value = _search.value.copy(keyword = k) }
-    fun setSource(s: LxSource) { _search.value = _search.value.copy(source = s) }
-
-    fun search() {
-        val s = _search.value
-        if (s.keyword.isBlank()) return
-        _search.value = s.copy(loading = true, error = null, results = emptyList())
-        viewModelScope.launch {
-            try {
-                val list = sourceManager.search(s.source, s.keyword)
-                _search.value = _search.value.copy(loading = false, results = list)
-            } catch (e: Exception) {
-                _search.value = _search.value.copy(loading = false, error = e.message ?: "搜索失败")
-            }
-        }
-    }
-
-    fun playFromResults(index: Int) {
-        val list = _search.value.results
-        if (index in list.indices) playAndOpen(list, index) // V5.1-1
     }
 
     // ---------------- library ----------------
@@ -655,6 +632,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun queueJumpTo(index: Int) = playerController.playAt(index)
     fun queueMove(from: Int, to: Int) = playerController.moveInQueue(from, to)
     fun queueRemove(index: Int) = playerController.removeFromQueue(index)
+
+    /** V1.1.0: the track the last queueRemove took out (for the undo snackbar). */
+    val lastQueueRemoval: Pair<MusicInfo, Int>?
+        get() = playerController.lastRemoved
+
+    /** V1.1.0: put the last removed queue track back. */
+    fun queueUndoRemove() = playerController.undoQueueRemoval()
     fun queueClear() = playerController.clearQueue()
 
     fun playList(list: List<MusicInfo>, startIndex: Int = 0) {
@@ -720,21 +704,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         settingsStore.setEq(playerController.equalizer.snapshot())
     }
 
-    // ---------------- sources ----------------
-
-    fun importSource(script: String) {
-        viewModelScope.launch {
-            try {
-                val entity = sourceManager.saveUserApi(script)
-                _loadedApiId.value = entity.id
-                sourceManager.loadScript(entity.id, entity.script)
-            } catch (e: Exception) {
-                _search.value = _search.value.copy(error = "导入失败: ${e.message}")
-            }
-        }
-    }
-
-
     // ---------------- settings ----------------
     fun openSettings() { _showSettings.value = true }
     fun closeSettings() { _showSettings.value = false }
@@ -752,6 +721,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setLyricOffset(ms: Int) = settingsStore.setLyricOffset(ms)
     fun setPreferLrcFile(on: Boolean) = settingsStore.setPreferLrcFile(on)
     fun setPlayerSkin(skin: String) = settingsStore.setPlayerSkin(skin)
+
+    /** V1.1.0: 卡死看门狗阈值（设置页「高级」）。 */
+    fun setWatchdogThresholds(stallMs: Long, bufferingMs: Long) =
+        settingsStore.setWatchdogThresholds(stallMs, bufferingMs)
     fun setShowPlayerMeta(on: Boolean) = settingsStore.setShowPlayerMeta(on)
 
     fun openFolderManager() { _showFolderManager.value = true }

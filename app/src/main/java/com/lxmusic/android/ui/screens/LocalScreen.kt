@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.outlined.ImageNotSupported
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QueueMusic
@@ -52,6 +54,7 @@ import com.lxmusic.android.local.LocalSort
 import com.lxmusic.android.local.MusicGroup
 import com.lxmusic.android.ui.MainViewModel
 import com.lxmusic.android.ui.components.Cover
+import com.lxmusic.android.ui.components.missingCoverBadge
 import com.lxmusic.android.ui.components.HintIconButton
 import com.lxmusic.android.ui.components.SearchBar
 import com.lxmusic.android.ui.components.SearchBarHeight
@@ -115,10 +118,24 @@ fun LocalScreen(viewModel: MainViewModel, onLongPress: (MusicInfo) -> Unit) {
             GroupChip("歌手", Icons.Default.Person, state.group == LocalGroup.ARTISTS, "按歌手分组浏览") {
                 viewModel.setLocalGroup(LocalGroup.ARTISTS)
             }
+            // V1.1.0: 缺封面筛——专辑图缺失的歌一眼找出来，方便补图。
+            GroupChip("缺封面", Icons.Outlined.ImageNotSupported, state.missingCoverOnly, "只看没有封面的歌曲") {
+                viewModel.setMissingCoverOnly(!state.missingCoverOnly)
+            }
         }
         Spacer(Modifier.height(OledTokens.spaceXs))
+        // V1.1.0: 「正在听」的主角是"接着听"，不是列表。有历史时卡片放大成
+        // 带封面的 hero，下面再铺一排最近听过的横滑封面；列表退居其后。
+        val recent by viewModel.recentLocal.collectAsState()
         if (lastPlayed != null) {
             LastPlayedCard(lastPlayed!!, onClick = { viewModel.resumeLastPlayed() })
+        }
+        if (recent.isNotEmpty()) {
+            RecentRail(recent, onClick = { music ->
+                // 在完整本地队列里播它，保住"上一首/下一首"的上下文。
+                val at = state.allTracks.indexOfFirst { it.id == music.id }
+                if (at >= 0) viewModel.playLocal(at) else viewModel.resumeLastPlayed()
+            })
         }
         SectionHeader(title = "本地音乐", count = state.allTracks.size)
 
@@ -143,6 +160,9 @@ fun LocalScreen(viewModel: MainViewModel, onLongPress: (MusicInfo) -> Unit) {
                                 onClick = { viewModel.playLocal(i) },
                                 onLongClick = { onLongPress(music) },
                                 active = music.id == nowPlayingId,
+                                modifier = if (music.img.isNullOrBlank()) {
+                                    Modifier.missingCoverBadge()
+                                } else Modifier,
                             )
                             // V6.0: 换成渐隐线，深色底上不再连成硬栅栏。
                             NeonHairline()
@@ -266,6 +286,54 @@ private fun SortMenu(current: LocalSort, onSelect: (LocalSort) -> Unit) {
                     text = { Text(sort.label + if (sort == current) "  ✓" else "") },
                     onClick = { onSelect(sort); open = false },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * V1.1.0: 最近听过的横滑封面排。「正在听」页的第二主角——不占一整行列表，
+ * 但让"我最近在听什么"一眼可见。封面缺失时退回首字圆形占位。
+ */
+@Composable
+private fun RecentRail(recent: List<MusicInfo>, onClick: (MusicInfo) -> Unit) {
+    Column {
+        Text(
+            "最近在听",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = OledTokens.screenMargin, vertical = OledTokens.spaceSm),
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = OledTokens.screenMargin),
+            horizontalArrangement = Arrangement.spacedBy(OledTokens.spaceSm),
+        ) {
+            items(recent, key = { it.id }) { music ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .width(96.dp)
+                        .clip(RoundedCornerShape(OledTokens.radiusMd))
+                        .clickable { onClick(music) }
+                        .padding(bottom = OledTokens.spaceXs),
+                ) {
+                    Cover(music.img, 96.dp)
+                    Spacer(Modifier.height(OledTokens.spaceXs))
+                    Text(
+                        music.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        music.singer,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

@@ -45,8 +45,10 @@ enum class StallAction {
  * after 8s and never got the cheap retry this class promises.
  */
 class StallWatchdog(
-    private val stallMs: Long = 8_000L,
-    private val bufferingMs: Long = 20_000L,
+    // V1.1.0: var + 默认值不变——「高级」设置页可以按设备性能调宽/调紧；
+    // 改值即时生效，下一次 onTick 就用新阈值。
+    var stallMs: Long = 8_000L,
+    var bufferingMs: Long = 20_000L,
     private val escalateAfter: Int = 2,
 ) {
 

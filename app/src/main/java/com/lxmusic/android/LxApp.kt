@@ -3,12 +3,9 @@ package com.lxmusic.android
 import android.app.Application
 import com.lxmusic.android.data.db.AppDatabase
 import com.lxmusic.android.data.settings.SettingsStore
-import com.lxmusic.android.source.SourceManager
 
 class LxApp : Application() {
     lateinit var db: AppDatabase
-        private set
-    lateinit var sourceManager: SourceManager
         private set
     lateinit var settingsStore: SettingsStore
         private set
@@ -19,7 +16,6 @@ class LxApp : Application() {
         CrashLogger.install(this)
         instance = this
         db = AppDatabase.get(this)
-        sourceManager = SourceManager(this)
         settingsStore = SettingsStore.get(this)
     }
 

@@ -28,12 +28,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -51,6 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.lxmusic.android.ui.MainViewModel
 import com.lxmusic.android.ui.components.Cover
 import com.lxmusic.android.ui.components.ConfirmSheet
@@ -105,6 +111,11 @@ fun QueueScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         }
     }
 
+    // V1.1.0: 移除一首后给一条可撤销的 Snackbar——误触不再不可挽回。
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var removeSeq by remember { mutableStateOf(0) }
+
     var showClearConfirm by remember { mutableStateOf(false) }
     if (showClearConfirm) {
         ConfirmSheet(
@@ -114,6 +125,17 @@ fun QueueScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             onConfirm = { viewModel.queueClear() },
             onDismiss = { showClearConfirm = false },
         )
+    }
+
+    LaunchedEffect(removeSeq) {
+        if (removeSeq == 0) return@LaunchedEffect
+        val removal = viewModel.lastQueueRemoval ?: return@LaunchedEffect
+        val result = snackbar.showSnackbar(
+            message = "已移除「${removal.first.name}」",
+            actionLabel = "撤销",
+            withDismissAction = true,
+        )
+        if (result == SnackbarResult.ActionPerformed) viewModel.queueUndoRemove()
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -156,12 +178,26 @@ fun QueueScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             onClick = { viewModel.queueJumpTo(i) },
                             onUp = { viewModel.queueMove(i, (i - 1).coerceAtLeast(0)) },
                             onDown = { viewModel.queueMove(i, (i + 1).coerceAtMost(queue.size - 1)) },
-                            onRemove = { viewModel.queueRemove(i) },
+                            onRemove = {
+                                viewModel.queueRemove(i)
+                                removeSeq += 1
+                            },
                         )
                         NeonHairline()
                     }
                 }
             }
+        }
+        // 挂在整屏 Box 上，极光上面浮一条玻璃 Snackbar。
+        SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter)) { data ->
+            Snackbar(
+                action = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        viewModel.queueUndoRemove()
+                        data.dismiss()
+                    }) { Text("撤销", color = NeonTokens.brandGradient(themeColor)[1]) }
+                },
+            ) { Text(data.visuals.message) }
         }
     }
 }

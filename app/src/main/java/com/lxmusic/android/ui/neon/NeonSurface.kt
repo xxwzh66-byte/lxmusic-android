@@ -49,9 +49,22 @@ data class NeonSurfaceSpec(
  * 底色已经是浅灰紫，白色半透明才看得出"面板"这一层，用深色玻璃反而会脏。
  */
 @Composable
-fun rememberNeonSurface(dark: Boolean, themeColor: String): NeonSurfaceSpec {
-    return remember(dark, themeColor) {
-        val brand = NeonTokens.brandGradient(themeColor)
+fun rememberNeonSurface(
+    dark: Boolean,
+    themeColor: String,
+    /** V1.1.0: 当前曲目封面主色；null = 沿用调色板（第一次启动/纯色占位封面）。 */
+    artworkTint: androidx.compose.ui.graphics.Color? = null,
+): NeonSurfaceSpec {
+    return remember(dark, themeColor, artworkTint) {
+        val brand = artworkTint?.let { tint ->
+            // 封面主色替换品牌渐变的中段，首尾照旧做提亮/压暗，
+            // 保证三档可辨——与 brandGradient 同一套数值语言。
+            listOf(
+                NeonTokens.lighten(tint, 0.42f),
+                tint,
+                NeonTokens.darken(tint, 0.35f),
+            )
+        } ?: NeonTokens.brandGradient(themeColor)
         if (dark) {
             NeonSurfaceSpec(
                 baseColor = NeonTokens.inkSoft,
