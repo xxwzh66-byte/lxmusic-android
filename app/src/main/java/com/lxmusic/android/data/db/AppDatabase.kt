@@ -89,7 +89,6 @@ data class UserApiEntity(
     val author: String,
     val homepage: String,
     val script: String,
-    val allowShowUpdateAlert: Boolean = true,
     val createdAt: Long,
 )
 

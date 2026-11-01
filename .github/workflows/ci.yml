@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --console=plain
+      - name: Count test results
+        if: always()
+        run: python _cnt.py
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build versioned APK
+        run: ./gradlew :app:assembleDebug :app:versionedApk --no-daemon --console=plain
+      - name: Read version from build.gradle
+        id: ver
+        run: |
+          v=$(grep -oP 'ext\.appVersionName = "\K[^"]+' app/build.gradle)
+          c=$(grep -oP 'ext\.appVersionCode = \K[0-9]+' app/build.gradle)
+          echo "name=$v" >> "$GITHUB_OUTPUT"
+          echo "code=$c" >> "$GITHUB_OUTPUT"
+      - name: Upload APK to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/apk/jijian-music-${{ steps.ver.outputs.name }}-vc${{ steps.ver.outputs.code }}-debug.apk
+          generate_release_notes: true

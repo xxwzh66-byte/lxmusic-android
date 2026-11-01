@@ -69,7 +69,6 @@ data class UserApiInfo(
     val version: String = "",
     val author: String = "",
     val homepage: String = "",
-    var allowShowUpdateAlert: Boolean = true,
     /** Only populated for scripts persisted in-app (not for the bundled sample). */
     val script: String? = null,
 )

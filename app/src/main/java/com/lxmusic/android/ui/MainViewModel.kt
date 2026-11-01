@@ -180,7 +180,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * 仓库是私有的，匿名请求会 404 —— 所以带「访问令牌」设置项，留空就匿名试。
      * 网络在 IO 线程，结果落到 [updateCheck]，由界面弹「更新内容公告」对话框。
      */
-    fun checkForUpdates() {
+    fun checkForUpdates() = runUpdateCheck(silent = false)
+
+    /**
+     * V1.0.3: 启动时的静默检查（每 24h 一次，节流时间戳持久化）。
+     *
+     * 与 [checkForUpdates] 共用结果流，但只在「发现新版本」时打扰用户：
+     * 静默检查失败或"已是最新"都退回 IDLE——本应用可能全程离线，
+     * 设置页副标题不该显示一条用户从没主动发起过的检查结果。
+     */
+    fun maybeCheckForUpdatesOnStartup() {
+        if (_update.value.status != UpdateStatus.IDLE) return
+        val now = System.currentTimeMillis()
+        if (now - settingsStore.state.value.lastUpdateCheckAt < UPDATE_CHECK_INTERVAL_MS) return
+        settingsStore.setLastUpdateCheckAt(now)
+        runUpdateCheck(silent = true)
+    }
+
+    private fun runUpdateCheck(silent: Boolean) {
         if (_update.value.status == UpdateStatus.CHECKING) return
         val current = BuildConfig.VERSION_NAME
         _update.value = UpdateCheckState(status = UpdateStatus.CHECKING, currentVersion = current)
@@ -192,19 +209,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             updateSeq += 1
             _update.value = result.fold(
                 onSuccess = { info ->
-                    if (UpdateChecker.isNewer(info.tagName, current)) {
-                        UpdateCheckState(UpdateStatus.AVAILABLE, current, info, checkSeq = updateSeq)
-                    } else {
-                        UpdateCheckState(UpdateStatus.UP_TO_DATE, current, info, checkSeq = updateSeq)
+                    when {
+                        UpdateChecker.isNewer(info.tagName, current) ->
+                            UpdateCheckState(UpdateStatus.AVAILABLE, current, info, checkSeq = updateSeq)
+                        silent -> UpdateCheckState(currentVersion = current)
+                        else ->
+                            UpdateCheckState(UpdateStatus.UP_TO_DATE, current, info, checkSeq = updateSeq)
                     }
                 },
                 onFailure = { e ->
-                    UpdateCheckState(
-                        status = UpdateStatus.FAILED,
-                        currentVersion = current,
-                        message = e.message ?: "检查更新失败",
-                        checkSeq = updateSeq,
-                    )
+                    when {
+                        silent -> UpdateCheckState(currentVersion = current)
+                        else -> UpdateCheckState(
+                            status = UpdateStatus.FAILED,
+                            currentVersion = current,
+                            message = e.message ?: "检查更新失败",
+                            checkSeq = updateSeq,
+                        )
+                    }
                 },
             )
         }
@@ -886,5 +908,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         /** 滑杆停手多久之后落盘一次。 */
         const val EQ_PERSIST_DEBOUNCE_MS = 400L
+
+        /** V1.0.3: 启动静默检查更新的最小间隔（24h）。 */
+        const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
     }
 }

@@ -1,6 +1,6 @@
 # 极简music (JiJianMusic) for Android
 
-`applicationId = com.lxmusic.android` · 当前版本 **1.0.2** (`versionCode = 3`)
+`applicationId = com.lxmusic.android` · 当前版本 **1.0.3** (`versionCode = 4`)
 
 一个从 [lyswhut/lx-music-desktop](https://github.com/lyswhut/lx-music-desktop) 的
 音源架构出发、逐步转型为**纯本地极简音乐播放器**的 Android 应用。
@@ -346,6 +346,121 @@ explains the root causes behind them.
 `NeonTokensTest` is the same idea for the visual layer: it recomputes WCAG
 contrast over the *brightest possible* aurora composite on every palette, so a
 future "make it pop more" tweak cannot silently drop body text below AA.
+
+---
+
+## V1.0.3 — Silent update check on startup, and a home-screen banner (`versionCode = 4`)
+
+V1.0.2 put the check behind a button — you had to know to look. V1.0.3 closes
+the loop: the app asks once a day on its own, and a new release announces
+itself on the home screen.
+
+### What was added
+
+- **Silent startup check** (`MainViewModel.maybeCheckForUpdatesOnStartup`) —
+  runs once per 24 h, throttled by a persisted timestamp
+  (`last_update_check_at`). It shares the result flow with the manual check but
+  only *disturbs* you when it finds something: "already up to date" and
+  failures both fall back to `IDLE`, so the settings subtitle never shows the
+  result of a check you did not ask for, and an offline phone never sees a
+  spurious error dialog.
+- **Home-screen banner** — when the state lands on `AVAILABLE`, a glass banner
+  sits above the tab row: "发现新版本 vX.Y.Z" plus the release title, with the
+  brand accent bar and a pulsing dot. Tapping it opens the same release-notes
+  dialog the settings page uses (`UpdateDialog` was promoted to `internal`).
+- **CI + automated releases** (`.github/workflows/ci.yml`) — every push runs
+  the unit-test suite and counts the results; pushing a `v*` tag builds the
+  versioned APK and uploads it to a GitHub Release with generated notes. The
+  release notes *are* the update announcement the app fetches — publishing a
+  release and announcing it are now the same action.
+- **Dead-code sweep** — the never-read `allowShowUpdateAlert` field (both
+  `UserApiInfo` and `UserApiEntity`), the superseded design docs moved to
+  `docs/archive/`, and the repo helper scripts (`_cnt.py`, `_per_class.py`,
+  `_probe_stall.ps1`) rewritten to be path-independent and BOM-free.
+
+### Verification
+
+`build/apk/jijian-music-1.0.3-vc4-debug.apk`, `versionCode = 4`,
+`versionName = 1.0.3`, confirmed with `aapt2 dump badging`. 235 unit tests
+across 26 classes, 0 failures.
+
+---
+
+## V1.0.3 — Silent update checks, a home-screen banner, and CI (`versionCode = 4`)
+
+### What was added
+
+- **Startup check with a 24h throttle.** `MainViewModel.maybeCheckForUpdatesOnStartup()`
+  runs the same fetch as the settings button, but only once a day
+  (`last_update_check_at` persisted in `SettingsStore`, 28th key). A silent check
+  never disturbs the UI unless it genuinely finds a newer version: "up to date"
+  and "failed" both fall back to `IDLE`, because the app may run entirely offline
+  and the settings subtitle should not show a result the user never asked for.
+- **Home-screen banner.** When the silent check does find a new version, a glass
+  banner appears above the tab row ("发现新版本 v1.0.3 …", pulsing brand dot).
+  Tapping it opens the same release-notes dialog the settings page uses
+  (`UpdateDialog` moved from `private` to `internal` for reuse).
+- **GitHub Actions CI** (`.github/workflows/ci.yml`): every push runs the unit
+  tests and prints the `_cnt.py` tally; a `v*` tag builds the versioned APK and
+  uploads it to the GitHub Release — releases and the in-app announcements now
+  come from the same place the app checks.
+
+### What was removed
+
+- `allowShowUpdateAlert` — a dead flag on `UserApiInfo`/`UserApiEntity` with zero
+  readers (a leftover from the pre-1.0 announcement screen).
+- `docs/adr/0001`, `docs/adr/0002`, `docs/v6.1-refactor-plan.md` moved to
+  `docs/archive/` — they describe the shuffle-cycle semantics that V1.0.1
+  replaced. `_cnt.py` / `_per_class.py` / `_probe_stall.ps1` lost their BOM and
+  hard-coded `D:\demo` paths.
+
+### Verification
+
+`build/apk/jijian-music-1.0.3-vc4-debug.apk`, `versionCode = 4`, `versionName =
+1.0.3`, confirmed with `aapt2 dump badging`. 235 unit tests across 26 classes,
+0 failures.
+
+---
+
+## V1.0.3 — Silent update check, a home banner, and CI (`versionCode = 4`)
+
+The V1.0.2 checker only ran when you opened the settings page. Now the app
+checks for itself, and dead weight from earlier eras is gone.
+
+### What was added
+
+- **Startup check, throttled to once per 24 h** — `MainViewModel.maybeCheckForUpdatesOnStartup()`
+  runs on launch, persists its last-run timestamp in a new `last_update_check_at`
+  preference, and only reports when it genuinely finds a newer release: a failed
+  or up-to-date silent check folds back to `IDLE` so the settings page never
+  shows a result the user never asked for. The manual check in settings stays
+  unthrottled.
+- **Home banner** — when the silent check finds a new version, a glass banner
+  sits above the tab row ("发现新版本 v1.0.x"), reusing the shell's glass
+  language and the palette seed colour. Tapping it opens the same release-notes
+  dialog the settings page uses (`UpdateDialog` is now `internal` for that).
+- **GitHub Actions** (`.github/workflows/ci.yml`) — every push runs the full
+  unit suite (`_cnt.py` summary step included); a `v*` tag builds the versioned
+  APK and attaches it to a GitHub Release. Releases are now "publish a tag",
+  not a manual upload chain — which matters because the V1.0.2 checker reads
+  release notes as its announcement channel.
+- **Dead-code pass** — `allowShowUpdateAlert` (a leftover flag with zero
+  readers in `LxModels.kt` / `AppDatabase.kt`) is gone; the three pre-V1.0
+  design documents moved to `docs/archive/` (their semantics were superseded by
+  the V1.0.1 shuffle rewrite); `_cnt.py` / `_per_class.py` / `_probe_stall.ps1`
+  lost their BOM and hardcoded absolute paths; `ShuffleStallProbe` no longer
+  points at the deleted `_dex/` scratch directory.
+
+### Deliberately kept
+
+`recordHistory` looked dead but is not: `MainViewModel` reads it to gate
+`repo.markPlayed` (最近播放). It stays.
+
+### Verification
+
+`build/apk/jijian-music-1.0.3-vc4-debug.apk` (23,432,086 B), `versionCode = 4`,
+`versionName = 1.0.3`, confirmed with `aapt2 dump badging`. 235 unit tests
+across 26 classes, 0 failures.
 
 ---
 

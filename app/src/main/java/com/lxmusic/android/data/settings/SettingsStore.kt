@@ -82,6 +82,12 @@ data class AppSettings(
 
     /** V1.0.2: GitHub 访问令牌。仓库为私有，匿名拉不到 releases；留空则匿名请求。 */
     val updateToken: String = "",
+
+    /**
+     * V1.0.3: 上次成功发起「检查更新」的时间戳（毫秒）。
+     * 启动静默检查用它节流到每 24h 一次；手动检查不节流。
+     */
+    val lastUpdateCheckAt: Long = 0L,
 )
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
@@ -159,6 +165,9 @@ class SettingsStore private constructor(context: Context) {
 
     /** V1.0.2: GitHub 访问令牌（私有仓的 releases 要鉴权才能拉到）。 */
     fun setUpdateToken(token: String) = edit { writeUpdateToken(it, token) }
+
+    /** V1.0.3: 静默检查更新的节流时间戳（写入时机由调用方决定，这里只存）。 */
+    fun setLastUpdateCheckAt(atMs: Long) = edit { it[KEY_LAST_UPDATE_CHECK] = atMs }
 
     fun addScanFolder(uri: String) = edit { prefs ->
         prefs[KEY_SCAN_FOLDERS] = (prefs[KEY_SCAN_FOLDERS] ?: emptySet()) + uri
@@ -264,6 +273,7 @@ class SettingsStore private constructor(context: Context) {
                 loudnessMb = this[KEY_EQ_LOUDNESS] ?: 0,
             ),
             updateToken = this[KEY_UPDATE_TOKEN] ?: "",
+            lastUpdateCheckAt = this[KEY_LAST_UPDATE_CHECK] ?: 0L,
         )
 
         internal val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
@@ -293,5 +303,8 @@ class SettingsStore private constructor(context: Context) {
         internal val KEY_EQ_VIRTUALIZER = intPreferencesKey("eq_virtualizer")
         internal val KEY_EQ_LOUDNESS = intPreferencesKey("eq_loudness")
         internal val KEY_UPDATE_TOKEN = stringPreferencesKey("update_token")
+
+        /** V1.0.3: 启动静默检查更新的节流时间戳。 */
+        internal val KEY_LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_at")
         }
 }

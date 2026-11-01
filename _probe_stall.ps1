@@ -1,9 +1,9 @@
 # 长播探针：从头播一首，每 5 秒采样 media_session 的 position/state，跑满 170 秒。
-# 目的：验证「播放到 1 分 50 秒卡住」是否能在模拟器上复现。
-$adb = "D:\demo\android-sdk\platform-tools\adb.exe"
+# 目的：验证「播放中卡住」是否能在模拟器上复现（配合 player/StallWatchdog 的阈值）。
+$adb = if ($env:ANDROID_SDK_ROOT) { Join-Path $env:ANDROID_SDK_ROOT "platform-tools\adb.exe" } else { "adb" }
 $pkg = "com.lxmusic.android.debug"
 $act = "com.lxmusic.android.MainActivity"
-$log = "D:\demo\_shots\stall_probe.log"
+$log = Join-Path $env:TEMP "stall_probe.log"
 
 function W($msg) {
     $line = "$(Get-Date -Format 'HH:mm:ss') $msg"

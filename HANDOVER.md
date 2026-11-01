@@ -1,9 +1,9 @@
 # 极简music (JiJianMusic) — 项目交接报告
 
-> 交接版本：**versionCode 3 / versionName "1.0.2"**
-> 报告版本：**V1.0.2**（2026-10-29 按代码实况更新；V1.0 之前的逐版本历史已从本报告移除）
-> 代码规模：`app/src/main/java` 73 个 .kt / 13348 行；`app/src/test/java` 26 个 .kt / 3244 行 / **235 项测试 0 失败**
-> 产物：`build/apk/jijian-music-1.0.2-vc3-debug.apk`（23432086 B）
+> 交接版本：**versionCode 4 / versionName "1.0.3"**
+> 报告版本：**V1.0.3**（按代码实况更新；V1.0 之前的逐版本历史已从本报告移除）
+> 代码规模：`app/src/main/java` 73 个 .kt / 13407 行；`app/src/test/java` 26 个 .kt / 3223 行 / **235 项测试 0 失败**
+> 产物：`build/apk/jijian-music-1.0.3-vc4-debug.apk`（23432086 B）
 
 ---
 
@@ -154,7 +154,7 @@ WebView 之前就拒绝在线调用，**一个 WebView 进程都不会创建**�
 | `data/db/AppDatabase.kt` | Room **v4**。表：`song_list` / `playlist` / `favorite` / `play_history` / `play_event` / `user_api` / `local_track` |
 | `data/model/MusicInfo.kt` | 核心模型 `MusicInfo` / `QualityInfo` / `SongList` / `ListItem` |
 | `data/repo/MusicRepository.kt` | 所有 DAO 的门面；`logPlay` / `playRecords` 是统计功能的数据源 |
-| `data/settings/SettingsStore.kt` | DataStore；`AppSettings` 是**唯一设置真相**，27 个 KEY 常量（含 `record_stats`、6 个 `eq_*` 与 V1.0.2 的 `update_token`） |
+| `data/settings/SettingsStore.kt` | DataStore；`AppSettings` 是**唯一设置真相**，28 个 KEY 常量（含 `record_stats`、6 个 `eq_*`、V1.0.2 的 `update_token` 与 V1.0.3 的 `last_update_check_at`） |
 | `data/settings/EqProfile.kt` | 用户音调曲线的可持久化快照：enabled/preset/bands/bass/virtualizer/loudness；`encodeBands`/`decodeBands` 坏数据丢弃不抛 |
 | `data/stats/PlayStats.kt` | 播放统计纯逻辑：日/周/全部三档、直方图分桶、排行 |
 
@@ -280,7 +280,7 @@ V1.0.1 之前踩过的坑（**结论全部已被抽签语义取代，留作教�
 
 ```groovy
 ext.appVersionCode = 3
-ext.appVersionName = "1.0.2"
+ext.appVersionName = "1.0.3"
 ```
 
 改版本只改这两行，**不要**去动 `defaultConfig`。
@@ -291,7 +291,11 @@ QQ（及多数 IM 文件传输）**按「文件名 + 大小」去重**。此前�
 `app-debug.apk`，且相邻版本字节数相同，
 所以发新包给用户，QQ 认为「这个文件我已经有了」，**不认是新安装包**。
 
-`versionedApk` 把产物复制成 `jijian-music-1.0.2-vc3-debug.apk`——文件名唯一，问题消失。
+`versionedApk` 把产物复制成 `jijian-music-1.0.3-vc4-debug.apk`——文件名唯一，问题消失。
+
+### GitHub Actions（V1.0.3 起）
+
+`.github/workflows/ci.yml`：push 到 main 跑全量单测（含 `_cnt.py` 汇总步）；打 `v*` tag 会构建 versionedApk 并把 APK 挂到对应 GitHub Release。发版 = `git tag v1.0.x && git push origin v1.0.x`，正文可后补；App 内的检查更新读的就是这份 Release 的 tag/标题/正文。
 
 ### 签名
 
@@ -402,6 +406,16 @@ python -X utf8 _x.py
 > `writeEq` / `writeUpdateToken` 之所以抽成 `internal fun`，就是为了能在 JVM 单测里
 > 走真实写入侧验证往返。
 
+
+### V1.0.3 变更（静默更新检查 + 首页公告条 + CI + 清理）
+
+| 变更 | 说明 | 护栏 |
+|---|---|---|
+| 启动静默检查更新 | `MainViewModel.maybeCheckForUpdatesOnStartup()`：每 24h 一次（`UPDATE_CHECK_INTERVAL_MS` + 新 KEY `last_update_check_at` 节流）。静默失败或「已是最新」**退回 IDLE**——设置页副标题不显示用户没主动发起过的检查结果；手动检查不节流 | 行为锁在 LxApp 的 LaunchedEffect，节流值持久化 |
+| 首页新版本公告条 | `LxApp.UpdateBanner`：仅 `AVAILABLE` 时出现在标签栏上方，玻璃语言（neonGlass + 品牌竖条 + NeonDot 呼吸点），点按复用设置页的 `UpdateDialog`（已从 private 改 internal） | 复用对话框，不新建第二份公告 UI |
+| GitHub Actions | `.github/workflows/ci.yml`：push → 全量单测；`v*` tag → 构建 versionedApk + 挂到 Release | 发版从手工 API 链变成 `git tag && git push` |
+| 死代码清理 | 删 `allowShowUpdateAlert`（`LxModels.kt`/`AppDatabase.kt`，零读者）；三份被 V1.0.1 推翻的设计文档移入 `docs/archive/`；`_cnt.py`/`_per_class.py`/`_probe_stall.ps1` 去 BOM、去硬编码绝对路径；`ShuffleStallProbe` 注释不再指向已删的 `_dex/` | `recordHistory` **有意保留**：MainViewModel 读它 gate `repo.markPlayed`（最近播放），不是死开关 |
+
 ### V1.0.1 变更（两个方向都改成抽签 + 两个 seam）
 
 用户报的三条：「这一次的下一首随机，上一首不随机」「耳机切换依然第一次会重新播放这首歌」
@@ -472,10 +486,10 @@ V1.0 的修法只补了一半。
 
 ## 十、测试
 
-**235 项 / 26 个测试类 / 0 失败**（V1.0.2 实测）。全部是 JVM 单元测试（`app/src/test/java/`），
+**235 项 / 26 个测试类 / 0 失败**（V1.0.3 实测，与 V1.0.2 持平）。全部是 JVM 单元测试（`app/src/test/java/`），
 **不需要设备**。
 
-> **V1.0 → 217 项 / 25 类；V1.0.1 → 222 项 / 25 类；V1.0.2 → 235 项 / 26 类**（`PlayHistoryTest` 9 项随
+> **V1.0 → 217 项 / 25 类；V1.0.1 → 222 项 / 25 类；V1.0.2 → 235 项 / 26 类；V1.0.3 → 235 项 / 26 类（功能与清理不改测试面）**（`PlayHistoryTest` 9 项随
 > `PlayHistory.kt` 删除，新增 `QueueMirrorTest` 17 项，四个 shuffle 测试类按抽签语义重写）。
 > V1.0 之前的基线（144/17 → 214/25）见 `git log`。
 
@@ -534,8 +548,8 @@ V1.0 的修法只补了一半。
 里面是旧的 `ShuffleBag.kt` / `ShuffleBagTest.kt`，**没有 `RandomShuffle` 的历史版本**。
 
 项目根**没有** `UPDATE_PLAN.md`（早期版本的控制台报告里提过这个文件名，实际从未入库）。
-版本历史的权威记录是 `README.md` 的版本章节：当前版本在最前面的 `V1.0.2` 一节，
-往下是时间线留档（早于 V1.0.2 的章节只用于追溯，不代表当前行为）。
+版本历史的权威记录是 `README.md` 的版本章节：当前版本在最前面的 `V1.0.3` 一节，
+往下是时间线留档（早于 V1.0.3 的章节只用于追溯，不代表当前行为）。
 
 领域词表是 `GLOSSARY.md`（队列 / 镜像 playlist / 抽签 Draw / Next / Previous / 循环 /
 静默停顿 / 偏好 / 均衡器曲线 / 效果状态）。
@@ -555,7 +569,7 @@ V1.0 的修法只补了一半。
 - [ ] 读 `player/RandomShuffle.kt` 的 KDoc + `RandomShuffle*` 五个测试类 + `ShuffleStallProbe` + `QueueMirrorTest` + `StallWatchdogTest`
 - [ ] 读 `ui/theme/OledTokens.kt` 与 `ui/neon/NeonTokens.kt`（改 UI 前必读）
 - [ ] 读本报告第九节，决定先还哪笔技术债
-- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.0.2-vc3-debug.apk`
+- [ ] 若要真机调试：`adb install -r -d build/apk/jijian-music-1.0.3-vc4-debug.apk`
       （`-d` 必需：`versionCode` 相对 6.x 时代的 26 是降级，系统默认拒绝）
 
 ---
@@ -569,10 +583,10 @@ $env:JAVA_HOME="C:\Program Files (x86)\Android\openjdk\jdk-21.0.8"; $env:ANDROID
 .\gradlew.bat :app:assembleDebug :app:versionedApk :app:testDebugUnitTest --no-daemon --console=plain
 
 # 看 APK 版本
-D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.0.2-vc3-debug.apk | Select-String versionCode
+D:\demo\android-sdk\build-tools\34.0.0\aapt2.exe dump badging build\apk\jijian-music-1.0.3-vc4-debug.apk | Select-String versionCode
 
 # 验签
-D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.0.2-vc3-debug.apk
+D:\demo\android-sdk\build-tools\34.0.0\apksigner.bat verify --print-certs build\apk\jijian-music-1.0.3-vc4-debug.apk
 
 # 重新生成搜索 bundle
 cd D:\demo\lx-builder; node build.mjs

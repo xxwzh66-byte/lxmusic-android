@@ -9,7 +9,8 @@ import kotlin.random.Random
 /**
  * V1.0.1 探针：按 media3 1.4.1 的真实语义还原「随机播放」的端到端行为。
  *
- * 依据（反汇编 media3-exoplayer-1.4.1.aar 得到，见 `_dex/`）：
+ * 依据（对 media3-exoplayer 1.4.1 javap 反汇编核实；当时的过程记录见 git 历史里的
+ * `_dex/` 工作目录，已随仓库清理删除）：
  *  - `AbstractConcatenatedTimeline.getNextChildIndex(index, shuffle)`
  *      if (shuffle) return shuffleOrder.getNextIndex(index);
  *  - `AbstractConcatenatedTimeline.getNextWindowIndex(window, repeat, shuffle)`

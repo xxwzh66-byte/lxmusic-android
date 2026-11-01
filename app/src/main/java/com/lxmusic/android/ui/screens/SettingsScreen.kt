@@ -270,9 +270,10 @@ private fun TokenRow(token: String, onTokenChange: (String) -> Unit) {
  *
  * 成功时把 release 的标题与正文（就是 GitHub 上的 release notes）滚出来，
  * 外加本机/最新版本与 APK 大小；有 release 页面就给「前往下载」。
+ * V1.0.3 起首页的公告条也复用它，所以改为 internal。
  */
 @Composable
-private fun UpdateDialog(state: UpdateCheckState, onDismiss: () -> Unit) {
+internal fun UpdateDialog(state: UpdateCheckState, onDismiss: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val info = state.latest
     val hasLink = state.status == UpdateStatus.AVAILABLE && !info?.url.isNullOrBlank()

@@ -61,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lxmusic.android.FeatureFlags
 import com.lxmusic.android.data.model.MusicInfo
+import com.lxmusic.android.net.UpdateInfo
+import com.lxmusic.android.ui.UpdateStatus
+import com.lxmusic.android.ui.screens.UpdateDialog
 import com.lxmusic.android.ui.components.Cover
 import com.lxmusic.android.ui.components.HintIconButton
 import com.lxmusic.android.ui.components.TrackActionsSheet
@@ -105,8 +108,13 @@ fun LxApp(viewModel: MainViewModel) {
     LaunchedEffect(viewModel) {
         viewModel.openNowPlaying.collect { showNowPlaying = true }
     }
+    // V1.0.3: 启动静默检查更新（每 24h 一次，见 MainViewModel.maybeCheckForUpdatesOnStartup）。
+    LaunchedEffect(viewModel) { viewModel.maybeCheckForUpdatesOnStartup() }
+    val updateState by viewModel.updateCheck.collectAsState()
     var showQueue by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
+    // V1.0.3: 首页公告条点开后的「更新内容」对话框。
+    var showUpdateDialog by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<MusicInfo?>(null) }
     var actionRemoveContext by remember { mutableStateOf<Long?>(null) } // playlistId if removing
     val settingsOpen by viewModel.showSettings.collectAsState()
@@ -205,6 +213,16 @@ fun LxApp(viewModel: MainViewModel) {
             },
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
+                // V1.0.3: 有新版本时在标签栏上方挂一条公告，点按弹出「更新内容」。
+                val up = updateState
+                if (up.status == UpdateStatus.AVAILABLE && up.latest != null) {
+                    UpdateBanner(
+                        info = up.latest,
+                        current = up.currentVersion,
+                        themeColor = themeColor,
+                        onOpen = { showUpdateDialog = true },
+                    )
+                }
                 val visibleTabs = remember {
                     if (FeatureFlags.ONLINE_ENABLED) HomeTab.entries.toList()
                     else HomeTab.entries.filter { it != HomeTab.ONLINE }
@@ -257,6 +275,62 @@ fun LxApp(viewModel: MainViewModel) {
                 viewModel.deleteLocalFile(music) { msg -> toast(context, msg) }
             }) else null,
         )
+    }
+
+    // V1.0.3: 首页公告条点开的「更新内容」对话框，复用设置页的 UpdateDialog。
+    if (showUpdateDialog) {
+        UpdateDialog(state = updateState, onDismiss = { showUpdateDialog = false })
+    }
+}
+
+/**
+ * V1.0.3: 首页顶部的新版本公告条。
+ *
+ * 只在静默检查真的发现新版本时出现（UpdateStatus.AVAILABLE）；
+ * 「已是最新 / 检查失败」都不打扰。样式沿用外壳玻璃语言：半透明 + 1dp 描边，
+ * 左侧 3dp 品牌竖条与顶栏同源。
+ */
+@Composable
+private fun UpdateBanner(
+    info: com.lxmusic.android.net.UpdateInfo,
+    current: String,
+    themeColor: String,
+    onOpen: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .neonGlass(shape = RoundedCornerShape(14.dp))
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .width(3.dp)
+                .height(30.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(Brush.verticalGradient(NeonTokens.brandGradient(themeColor))),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "发现新版本 ${info.tagName}",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                info.title.ifBlank { "点按查看更新内容（当前 $current）" },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        NeonDot(color = NeonTokens.brandGradient(themeColor)[1], pulse = true)
     }
 }
 
