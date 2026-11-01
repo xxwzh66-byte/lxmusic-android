@@ -36,9 +36,7 @@ jobs:
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Restore the release keystore
-        env:
-          KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
-        run: echo "$KEYSTORE_B64" | base64 -d > /tmp/jijian.keystore
+        run: echo "${{ secrets.JIJIAN_KEYSTORE_B64 }}" | base64 -d > /tmp/jijian.keystore
       - name: Build versioned APK
         run: ./gradlew :app:assembleDebug :app:versionedApk --no-daemon --console=plain
       - name: Read version from build.gradle
