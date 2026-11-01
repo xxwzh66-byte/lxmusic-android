@@ -29,6 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # A workflow-level `env:` referencing secrets made GitHub reject the whole
+    # workflow at parse time (startup_failure on every run). Job-level env with
+    # secrets is the supported form, so the keystore secret lives here.
+    env:
+      KEYSTORE_B64: ${{ secrets.JIJIAN_KEYSTORE_B64 }}
+      JIJIAN_KEYSTORE: /tmp/jijian.keystore
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
